@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Image, PanResponder, StyleSheet, View } from 'react-native';
-import type { GestureResponderEvent, PanResponderGestureState } from 'react-native';
+import type { GestureResponderEvent } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { Point, Stroke } from './types';
 
@@ -12,6 +12,10 @@ interface DrawingCanvasProps {
   activeColor: string;
   activeStrokeWidth: number;
   onStrokesChange: (strokes: Stroke[]) => void;
+  /** When false, this canvas ignores single-finger touches so an ancestor (e.g. the page list's
+   * own scroll, or a pinch-zoom handler) can claim them instead. Defaults to true to match this
+   * component's original always-draws behavior. */
+  drawingEnabled?: boolean;
 }
 
 // Quadratic-bezier-through-midpoints smoothing: the standard technique for turning sparse,
@@ -47,6 +51,7 @@ export function DrawingCanvas({
   activeColor,
   activeStrokeWidth,
   onStrokesChange,
+  drawingEnabled = true,
 }: DrawingCanvasProps): React.JSX.Element {
   const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
 
@@ -55,7 +60,7 @@ export function DrawingCanvas({
   const activeColorRef = useRef(activeColor);
   const activeStrokeWidthRef = useRef(activeStrokeWidth);
   const onStrokesChangeRef = useRef(onStrokesChange);
-  const startPointRef = useRef<Point>({ x: 0, y: 0 });
+  const drawingEnabledRef = useRef(drawingEnabled);
 
   useEffect(() => {
     strokesRef.current = strokes;
@@ -69,20 +74,32 @@ export function DrawingCanvas({
   useEffect(() => {
     onStrokesChangeRef.current = onStrokesChange;
   }, [onStrokesChange]);
+  useEffect(() => {
+    drawingEnabledRef.current = drawingEnabled;
+  }, [drawingEnabled]);
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      // Single-finger only, and only while drawing is enabled - a second finger (pinch-zoom) or
+      // scroll-mode must be free to claim the gesture instead (see onPanResponderTerminationRequest
+      // below and AnnotatePageItem's zoom responder, which captures as soon as a 2nd touch lands).
+      onStartShouldSetPanResponder: (evt: GestureResponderEvent) =>
+        drawingEnabledRef.current && evt.nativeEvent.touches.length <= 1,
+      onMoveShouldSetPanResponder: (evt: GestureResponderEvent) =>
+        drawingEnabledRef.current && evt.nativeEvent.touches.length <= 1,
+      onPanResponderTerminationRequest: () => true,
       onPanResponderGrant: (evt: GestureResponderEvent) => {
         const { locationX, locationY } = evt.nativeEvent;
-        startPointRef.current = { x: locationX, y: locationY };
         setCurrentPoints([{ x: locationX, y: locationY }]);
       },
-      onPanResponderMove: (_evt: GestureResponderEvent, gestureState: PanResponderGestureState) => {
-        const x = startPointRef.current.x + gestureState.dx;
-        const y = startPointRef.current.y + gestureState.dy;
-        setCurrentPoints(previous => [...previous, { x, y }]);
+      // locationX/locationY (rather than gestureState.dx/dy, which are raw screen-pixel deltas) are
+      // used so points stay correct in this view's own local coordinate space even when an ancestor
+      // applies a live pinch-zoom transform - native touch dispatch reports touch location already
+      // adjusted for any ancestor transform, so this canvas always captures points in the same fixed,
+      // unzoomed page-image space that pageDpi describes, regardless of the on-screen zoom level.
+      onPanResponderMove: (evt: GestureResponderEvent) => {
+        const { locationX, locationY } = evt.nativeEvent;
+        setCurrentPoints(previous => [...previous, { x: locationX, y: locationY }]);
       },
       onPanResponderRelease: () => {
         setCurrentPoints(previous => {

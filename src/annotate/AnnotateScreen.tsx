@@ -2,17 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
+import type { ListViewToken } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AnnotatePageItem, PAGE_ROW_GAP } from './AnnotatePageItem';
+import type { PageCanvasSize, PageRenderEntry } from './AnnotatePageItem';
 import { closePdfDocument, openPdfDocument, renderPdfPageToFile } from '../pdf/NativePdfiumModule';
 import { DEFAULT_PRINT_DPI } from '../pdf/types';
-import { DrawingCanvas } from './DrawingCanvas';
 import type { AnnotationPageInput } from './NativeAnnotationModule';
 import { saveAnnotatedPdf } from './NativeAnnotationModule';
 import type { PageAnnotations, Stroke } from './types';
@@ -27,14 +30,12 @@ interface AnnotateScreenProps {
   onSaved: (savedFileUri: string) => void;
 }
 
-interface CanvasSize {
-  width: number;
-  height: number;
-}
-
 const PREVIEW_DPI = 150;
 const CONTENT_HORIZONTAL_PADDING = 16;
-const CHROME_HEIGHT_ESTIMATE = 260;
+// Used only to size the FlatList's loading placeholders and its getItemLayout estimate before a
+// page's real aspect ratio is known - actual rendered size always comes from the page's own
+// rasterized dimensions once available, so a rough guess here is harmless.
+const ESTIMATED_PAGE_ASPECT_RATIO = Math.sqrt(2);
 
 const COLOR_PRESETS = ['#000000', '#e63946', '#1d4ed8', '#16a34a', '#eab308', '#f97316'];
 
@@ -44,17 +45,10 @@ const STROKE_WIDTH_PRESETS: { label: string; value: number }[] = [
   { label: 'Thick', value: 8 },
 ];
 
-function computeFitSize(naturalWidth: number, naturalHeight: number, maxWidth: number, maxHeight: number): CanvasSize {
+function computePageSize(naturalWidth: number, naturalHeight: number, maxWidth: number): PageCanvasSize {
   const safeMaxWidth = Math.max(maxWidth, 1);
-  const safeMaxHeight = Math.max(maxHeight, 1);
   const aspect = naturalWidth / naturalHeight;
-  let width = safeMaxWidth;
-  let height = width / aspect;
-  if (height > safeMaxHeight) {
-    height = safeMaxHeight;
-    width = height * aspect;
-  }
-  return { width, height };
+  return { width: safeMaxWidth, height: safeMaxWidth / aspect };
 }
 
 function clampPageIndex(index: number, pageCount: number): number {
@@ -70,27 +64,43 @@ export function AnnotateScreen({
   onSaved,
 }: AnnotateScreenProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
 
-  const [currentPageIndex, setCurrentPageIndex] = useState(() => clampPageIndex(initialPage, pageCount));
+  const clampedInitialPage = useMemo(() => clampPageIndex(initialPage, pageCount), [initialPage, pageCount]);
+
+  const [activePageIndex, setActivePageIndex] = useState(clampedInitialPage);
+  const [visiblePageIndex, setVisiblePageIndex] = useState(clampedInitialPage);
   const [pageAnnotations, setPageAnnotations] = useState<PageAnnotations>({});
+  const [pageRenders, setPageRenders] = useState<Record<number, PageRenderEntry>>({});
   const [handle, setHandle] = useState<string | null>(null);
-  const [pageImageUri, setPageImageUri] = useState<string | null>(null);
-  const [canvasSize, setCanvasSize] = useState<CanvasSize | null>(null);
-  const [isLoadingPage, setIsLoadingPage] = useState(true);
+  const [isDrawingMode, setIsDrawingMode] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeColor, setActiveColor] = useState<string>(COLOR_PRESETS[0]);
   const [activeStrokeWidth, setActiveStrokeWidth] = useState<number>(STROKE_WIDTH_PRESETS[1].value);
 
   const handleRef = useRef<string | null>(null);
-  // Per-page effective dpi of the coordinate space its strokes were captured in - see
-  // NativeAnnotationModule's AnnotationPageInput.pageDpi doc for what this means.
+  const mountedRef = useRef(true);
+  const requestedPagesRef = useRef<Set<number>>(new Set());
+  // Per-page effective dpi of the unzoomed coordinate space its strokes were captured in - see
+  // NativeAnnotationModule's AnnotationPageInput.pageDpi doc for what this means. This is set once
+  // per page from its initial fit-to-width render and does NOT change with the user's live
+  // pinch-zoom level: DrawingCanvas always reports touch points in that same unzoomed local
+  // coordinate frame regardless of any transform an ancestor applies (see AnnotatePageItem and
+  // DrawingCanvas's onPanResponderMove comment), so one pageDpi value stays valid for every stroke
+  // on a page no matter when, or how much, the user zoomed while drawing it.
   const pageDpiMapRef = useRef<Record<number, number>>({});
 
   useEffect(() => {
     handleRef.current = handle;
   }, [handle]);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -118,69 +128,61 @@ export function AnnotateScreen({
     // Only ever opens once per mounted screen instance.
   }, [filePath]);
 
-  useEffect(() => {
-    if (!handle) return;
-    let cancelled = false;
-    setIsLoadingPage(true);
-    setPageImageUri(null);
+  const maxWidth = windowWidth - CONTENT_HORIZONTAL_PADDING * 2;
+  const estimatedItemHeight = maxWidth * ESTIMATED_PAGE_ASPECT_RATIO + PAGE_ROW_GAP;
 
-    const outputPath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/annotate-preview-${currentPageIndex}-${Date.now()}.png`;
-    renderPdfPageToFile(handle, currentPageIndex, PREVIEW_DPI, outputPath)
-      .then(rendered => {
-        if (cancelled) return;
-        const maxWidth = windowWidth - CONTENT_HORIZONTAL_PADDING * 2;
-        const maxHeight = windowHeight - CHROME_HEIGHT_ESTIMATE - insets.top - insets.bottom;
-        const fitted = computeFitSize(rendered.width, rendered.height, maxWidth, maxHeight);
-        pageDpiMapRef.current[currentPageIndex] = (PREVIEW_DPI * fitted.width) / rendered.width;
-        setCanvasSize(fitted);
-        setPageImageUri(`file://${rendered.outputPath}`);
-        setIsLoadingPage(false);
-      })
-      .catch(error => {
-        if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : 'Failed to render page.');
-          setIsLoadingPage(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [handle, currentPageIndex, windowWidth, windowHeight, insets.top, insets.bottom]);
+  const renderPage = useCallback(
+    (pageIndex: number) => {
+      if (handle == null || requestedPagesRef.current.has(pageIndex)) return;
+      requestedPagesRef.current.add(pageIndex);
+      setPageRenders(previous => ({ ...previous, [pageIndex]: { status: 'loading' } }));
+
+      const outputPath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/annotate-preview-${pageIndex}-${Date.now()}.png`;
+      renderPdfPageToFile(handle, pageIndex, PREVIEW_DPI, outputPath)
+        .then(rendered => {
+          if (!mountedRef.current) return;
+          const fitted = computePageSize(rendered.width, rendered.height, maxWidth);
+          pageDpiMapRef.current[pageIndex] = (PREVIEW_DPI * fitted.width) / rendered.width;
+          setPageRenders(previous => ({
+            ...previous,
+            [pageIndex]: { status: 'ready', imageUri: `file://${rendered.outputPath}`, canvasSize: fitted },
+          }));
+        })
+        .catch(error => {
+          if (!mountedRef.current) return;
+          requestedPagesRef.current.delete(pageIndex);
+          setPageRenders(previous => ({ ...previous, [pageIndex]: { status: 'error' } }));
+          setErrorMessage(error instanceof Error ? error.message : `Failed to render page ${pageIndex + 1}.`);
+        });
+    },
+    [handle, maxWidth],
+  );
 
   const hasUnsavedStrokes = useMemo(
     () => Object.values(pageAnnotations).some(strokes => strokes.length > 0),
     [pageAnnotations],
   );
 
-  const handleStrokesChange = useCallback(
-    (strokes: Stroke[]) => {
-      setPageAnnotations(previous => ({ ...previous, [currentPageIndex]: strokes }));
-    },
-    [currentPageIndex],
-  );
+  const handleStrokesChange = useCallback((pageIndex: number, strokes: Stroke[]) => {
+    setPageAnnotations(previous => ({ ...previous, [pageIndex]: strokes }));
+    setActivePageIndex(pageIndex);
+  }, []);
 
   const handleUndo = useCallback(() => {
     setPageAnnotations(previous => {
-      const pageStrokes = previous[currentPageIndex] ?? [];
+      const pageStrokes = previous[activePageIndex] ?? [];
       if (pageStrokes.length === 0) return previous;
-      return { ...previous, [currentPageIndex]: pageStrokes.slice(0, -1) };
+      return { ...previous, [activePageIndex]: pageStrokes.slice(0, -1) };
     });
-  }, [currentPageIndex]);
+  }, [activePageIndex]);
 
   const handleClearPage = useCallback(() => {
     setPageAnnotations(previous => {
-      const pageStrokes = previous[currentPageIndex] ?? [];
+      const pageStrokes = previous[activePageIndex] ?? [];
       if (pageStrokes.length === 0) return previous;
-      return { ...previous, [currentPageIndex]: [] };
+      return { ...previous, [activePageIndex]: [] };
     });
-  }, [currentPageIndex]);
-
-  const goToPage = useCallback(
-    (nextIndex: number) => {
-      setCurrentPageIndex(clampPageIndex(nextIndex, pageCount));
-    },
-    [pageCount],
-  );
+  }, [activePageIndex]);
 
   const handleClose = useCallback(() => {
     if (hasUnsavedStrokes) {
@@ -240,9 +242,56 @@ export function AnnotateScreen({
     }
   }, [fileName, filePath, isSaving, onSaved, pageAnnotations]);
 
-  const currentStrokes = pageAnnotations[currentPageIndex] ?? [];
-  const isFirstPage = currentPageIndex === 0;
-  const isLastPage = currentPageIndex >= pageCount - 1;
+  const pageIndices = useMemo(() => Array.from({ length: pageCount }, (_, index) => index), [pageCount]);
+
+  const keyExtractor = useCallback((item: number) => String(item), []);
+
+  const getItemLayout = useCallback(
+    (_data: ArrayLike<number> | null | undefined, index: number) => ({
+      length: estimatedItemHeight,
+      offset: estimatedItemHeight * index,
+      index,
+    }),
+    [estimatedItemHeight],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: number }) => (
+      <AnnotatePageItem
+        pageIndex={item}
+        width={maxWidth}
+        estimatedHeight={estimatedItemHeight}
+        entry={pageRenders[item]}
+        strokes={pageAnnotations[item] ?? []}
+        activeColor={activeColor}
+        activeStrokeWidth={activeStrokeWidth}
+        drawingEnabled={isDrawingMode}
+        onStrokesChange={handleStrokesChange}
+        onRequestRender={renderPage}
+      />
+    ),
+    [
+      maxWidth,
+      estimatedItemHeight,
+      pageRenders,
+      pageAnnotations,
+      activeColor,
+      activeStrokeWidth,
+      isDrawingMode,
+      handleStrokesChange,
+      renderPage,
+    ],
+  );
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ListViewToken[] }) => {
+    const firstVisible = viewableItems.find(token => token.isViewable && typeof token.item === 'number');
+    if (firstVisible != null) {
+      setVisiblePageIndex(firstVisible.item as number);
+    }
+  }).current;
+
+  const currentStrokes = pageAnnotations[activePageIndex] ?? [];
 
   return (
     <View style={styles.container}>
@@ -262,39 +311,31 @@ export function AnnotateScreen({
         </Pressable>
       </View>
 
-      <View style={styles.pageNavRow}>
-        <Pressable
-          onPress={() => goToPage(currentPageIndex - 1)}
-          disabled={isFirstPage}
-          style={[styles.navButton, isFirstPage && styles.navButtonDisabled]}
-        >
-          <Text style={styles.navLabel}>{'‹ Prev'}</Text>
-        </Pressable>
-        <Text style={styles.pageIndicatorText}>
-          Page {currentPageIndex + 1} of {pageCount}
-        </Text>
-        <Pressable
-          onPress={() => goToPage(currentPageIndex + 1)}
-          disabled={isLastPage}
-          style={[styles.navButton, isLastPage && styles.navButtonDisabled]}
-        >
-          <Text style={styles.navLabel}>{'Next ›'}</Text>
-        </Pressable>
-      </View>
-
       <View style={styles.canvasArea}>
-        {isLoadingPage || pageImageUri == null || canvasSize == null ? (
+        {handle == null ? (
           <ActivityIndicator size="large" color="#2f6fed" />
         ) : (
-          <DrawingCanvas
-            pageImageUri={pageImageUri}
-            width={canvasSize.width}
-            height={canvasSize.height}
-            strokes={currentStrokes}
-            activeColor={activeColor}
-            activeStrokeWidth={activeStrokeWidth}
-            onStrokesChange={handleStrokesChange}
+          <FlatList
+            data={pageIndices}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            getItemLayout={getItemLayout}
+            initialScrollIndex={clampedInitialPage}
+            initialNumToRender={3}
+            windowSize={5}
+            maxToRenderPerBatch={2}
+            removeClippedSubviews
+            viewabilityConfig={viewabilityConfig}
+            onViewableItemsChanged={onViewableItemsChanged}
+            contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 16 }]}
           />
+        )}
+        {handle != null && pageCount > 0 && (
+          <View style={styles.pageBadge} pointerEvents="none">
+            <Text style={styles.pageBadgeText}>
+              {visiblePageIndex + 1} / {pageCount}
+            </Text>
+          </View>
         )}
       </View>
 
@@ -305,6 +346,24 @@ export function AnnotateScreen({
       )}
 
       <View style={styles.toolbar}>
+        <View style={styles.modeRow}>
+          {/* Drawing greedily claims single-finger touches (to start a stroke on touch-down), which
+              would otherwise starve the list's own single-finger scroll - Scroll mode releases that
+              claim so the page list can be navigated normally; pinch-zoom works in either mode since
+              it only ever reacts to a 2nd touch. */}
+          <Pressable
+            onPress={() => setIsDrawingMode(true)}
+            style={[styles.modeButton, isDrawingMode && styles.modeButtonActive]}
+          >
+            <Text style={styles.modeLabel}>Draw</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setIsDrawingMode(false)}
+            style={[styles.modeButton, !isDrawingMode && styles.modeButtonActive]}
+          >
+            <Text style={styles.modeLabel}>Scroll</Text>
+          </Pressable>
+        </View>
         <View style={styles.colorRow}>
           {COLOR_PRESETS.map(color => (
             <Pressable
@@ -388,36 +447,27 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
   },
-  pageNavRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#101418',
-  },
-  navButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#1c2128',
-  },
-  navButtonDisabled: {
-    opacity: 0.4,
-  },
-  navLabel: {
-    color: '#63a4ff',
-    fontWeight: '600',
-  },
-  pageIndicatorText: {
-    color: '#a0a8b4',
-    fontSize: 13,
-  },
   canvasArea: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: '#4b4f56',
+  },
+  listContent: {
+    alignItems: 'center',
+    paddingTop: 16,
+  },
+  pageBadge: {
+    position: 'absolute',
+    top: 12,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(16,20,24,0.75)',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  pageBadgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   errorBanner: {
     paddingHorizontal: 16,
@@ -431,6 +481,25 @@ const styles = StyleSheet.create({
   toolbar: {
     padding: 12,
     backgroundColor: '#101418',
+  },
+  modeRow: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  modeButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1c2128',
+    marginRight: 8,
+  },
+  modeButtonActive: {
+    backgroundColor: '#2f6fed',
+  },
+  modeLabel: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
   },
   colorRow: {
     flexDirection: 'row',

@@ -1,8 +1,36 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  KeyboardAvoidingView,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { closePdfDocument, openPdfDocument } from '../pdf/NativePdfiumModule';
+import { CloseButton } from '../ui/CloseButton';
 import { findTextInPdf } from './NativePdfTextModule';
 import type { PdfFindMatch } from './types';
+
+/**
+ * Splits a snippet into the text before/at/after the first case-insensitive occurrence of `query`
+ * so the match can be rendered highlighted. The snippet is built server-side by centering on the
+ * exact match, so the query text is virtually always still present verbatim - this is a plain
+ * client-side re-search rather than threading match offsets through the native bridge, since a
+ * short snippet is cheap to re-scan and this avoids touching the native find code at all.
+ */
+function splitSnippetAtMatch(snippet: string, query: string): { before: string; match: string; after: string } | null {
+  if (query.length === 0) return null;
+  const matchIndex = snippet.toLowerCase().indexOf(query.toLowerCase());
+  if (matchIndex < 0) return null;
+  return {
+    before: snippet.slice(0, matchIndex),
+    match: snippet.slice(matchIndex, matchIndex + query.length),
+    after: snippet.slice(matchIndex + query.length),
+  };
+}
 
 interface FindPanelProps {
   filePath: string;
@@ -99,12 +127,10 @@ export function FindPanel({ filePath, onJumpToPage, onClose }: FindPanelProps): 
   }, [query, phase]);
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView style={styles.container} behavior="height">
       <View style={styles.headerRow}>
         <Text style={styles.title}>Find in document</Text>
-        <Pressable onPress={onClose} hitSlop={12}>
-          <Text style={styles.closeLabel}>Close</Text>
-        </Pressable>
+        <CloseButton onPress={onClose} />
       </View>
 
       <TextInput
@@ -146,17 +172,28 @@ export function FindPanel({ filePath, onJumpToPage, onClose }: FindPanelProps): 
           style={styles.list}
           data={matches}
           keyExtractor={(item, index) => `${item.pageIndex}-${index}`}
-          renderItem={({ item }) => (
-            <Pressable style={styles.resultRow} onPress={() => onJumpToPage(item.pageIndex)}>
-              <Text style={styles.resultPage}>Page {item.pageIndex + 1}</Text>
-              <Text style={styles.resultSnippet} numberOfLines={2}>
-                {item.snippet}
-              </Text>
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const split = splitSnippetAtMatch(item.snippet, query.trim());
+            return (
+              <Pressable style={styles.resultRow} onPress={() => onJumpToPage(item.pageIndex)}>
+                <Text style={styles.resultPage}>Page {item.pageIndex + 1}</Text>
+                <Text style={styles.resultSnippet} numberOfLines={2}>
+                  {split == null ? (
+                    item.snippet
+                  ) : (
+                    <>
+                      {split.before}
+                      <Text style={styles.resultSnippetMatch}>{split.match}</Text>
+                      {split.after}
+                    </>
+                  )}
+                </Text>
+              </Pressable>
+            );
+          }}
         />
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -176,10 +213,6 @@ const styles = StyleSheet.create({
   title: {
     color: '#ffffff',
     fontSize: 16,
-    fontWeight: '600',
-  },
-  closeLabel: {
-    color: '#63a4ff',
     fontWeight: '600',
   },
   input: {
@@ -227,5 +260,10 @@ const styles = StyleSheet.create({
   resultSnippet: {
     color: '#e6e6e6',
     fontSize: 13,
+  },
+  resultSnippetMatch: {
+    color: '#101418',
+    backgroundColor: '#ffd54a',
+    fontWeight: '700',
   },
 });

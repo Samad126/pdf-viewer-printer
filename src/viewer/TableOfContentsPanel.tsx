@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { TableContent } from 'react-native-pdf';
+import { CloseButton } from '../ui/CloseButton';
 
 interface TableOfContentsPanelProps {
   entries: TableContent[];
@@ -13,9 +14,7 @@ export function TableOfContentsPanel({ entries, onSelectPage, onClose }: TableOf
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Contents</Text>
-        <Pressable onPress={onClose} hitSlop={12}>
-          <Text style={styles.closeLabel}>Close</Text>
-        </Pressable>
+        <CloseButton onPress={onClose} />
       </View>
       {entries.length === 0 ? (
         <Text style={styles.emptyText}>This PDF has no table of contents.</Text>
@@ -75,10 +74,6 @@ const styles = StyleSheet.create({
   title: {
     color: '#ffffff',
     fontSize: 16,
-    fontWeight: '600',
-  },
-  closeLabel: {
-    color: '#63a4ff',
     fontWeight: '600',
   },
   emptyText: {

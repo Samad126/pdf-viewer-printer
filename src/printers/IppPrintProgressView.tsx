@@ -1,11 +1,13 @@
 import React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { CloseButton } from '../ui/CloseButton';
 import { isTerminalJobState } from './types';
 import type { IppPrintErrorKind, IppPrintPipelineState } from './types';
 
 interface IppPrintProgressViewProps {
   state: IppPrintPipelineState;
   onCancel?: () => void;
+  onDismiss?: () => void;
 }
 
 const STAGE_LABELS: Record<IppPrintPipelineState['stage'], string> = {
@@ -26,7 +28,11 @@ const ERROR_KIND_MESSAGES: Record<IppPrintErrorKind, string> = {
   unknown: 'Something went wrong while printing directly to this printer.',
 };
 
-export function IppPrintProgressView({ state, onCancel }: IppPrintProgressViewProps): React.JSX.Element | null {
+export function IppPrintProgressView({
+  state,
+  onCancel,
+  onDismiss,
+}: IppPrintProgressViewProps): React.JSX.Element | null {
   if (state.stage === 'idle') {
     return null;
   }
@@ -42,8 +48,11 @@ export function IppPrintProgressView({ state, onCancel }: IppPrintProgressViewPr
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        {isSpinning && <ActivityIndicator size="small" style={styles.spinner} />}
-        <Text style={styles.stageLabel}>{STAGE_LABELS[state.stage]}</Text>
+        <View style={styles.headerLeft}>
+          {isSpinning && <ActivityIndicator size="small" style={styles.spinner} />}
+          <Text style={styles.stageLabel}>{STAGE_LABELS[state.stage]}</Text>
+        </View>
+        {onDismiss != null && <CloseButton onPress={onDismiss} />}
       </View>
 
       {state.stage === 'rasterizing' && state.totalPages > 0 && (
@@ -81,6 +90,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
   },

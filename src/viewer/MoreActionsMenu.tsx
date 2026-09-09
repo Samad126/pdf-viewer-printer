@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { CloseButton } from '../ui/CloseButton';
 
 export interface MoreActionsMenuItem {
   key: string;
@@ -9,13 +10,18 @@ export interface MoreActionsMenuItem {
 }
 
 interface MoreActionsMenuProps {
+  title?: string;
   items: MoreActionsMenuItem[];
   onClose: () => void;
 }
 
-export function MoreActionsMenu({ items, onClose }: MoreActionsMenuProps): React.JSX.Element {
+export function MoreActionsMenu({ title = 'Actions', items, onClose }: MoreActionsMenuProps): React.JSX.Element {
   return (
     <View style={styles.container}>
+      <View style={styles.headerRow}>
+        <Text style={styles.headerTitle}>{title}</Text>
+        <CloseButton onPress={onClose} />
+      </View>
       {items.map(item => (
         <Pressable
           key={item.key}
@@ -41,6 +47,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#101418',
     borderRadius: 12,
     overflow: 'hidden',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#2a2f36',
+  },
+  headerTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   itemRow: {
     paddingVertical: 14,

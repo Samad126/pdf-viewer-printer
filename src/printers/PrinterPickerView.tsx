@@ -1,10 +1,12 @@
 import React, { useCallback, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { CloseButton } from '../ui/CloseButton';
 import type { IppDiscoveredPrinter, IppDiscoveryState, IppPrinterTarget } from './types';
 
 interface PrinterPickerViewProps {
   discovery: IppDiscoveryState;
   onSelect: (target: IppPrinterTarget) => void;
+  onClose: () => void;
   disabled?: boolean;
 }
 
@@ -14,6 +16,7 @@ const DEFAULT_MANUAL_RESOURCE_PATH = 'ipp/print';
 export function PrinterPickerView({
   discovery,
   onSelect,
+  onClose,
   disabled = false,
 }: PrinterPickerViewProps): React.JSX.Element {
   const [manualHost, setManualHost] = useState('');
@@ -44,7 +47,10 @@ export function PrinterPickerView({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Select a printer</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Select a printer</Text>
+        <CloseButton onPress={onClose} />
+      </View>
 
       {discovery.stage === 'discovering' && discovery.printers.length === 0 && (
         <Text style={styles.hint}>Searching the local network for printers…</Text>
@@ -125,11 +131,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#101418',
     borderRadius: 12,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   title: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 8,
   },
   hint: {
     color: '#c7c7c7',

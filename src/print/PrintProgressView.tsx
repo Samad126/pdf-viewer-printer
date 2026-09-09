@@ -1,9 +1,11 @@
 import React from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { CloseButton } from '../ui/CloseButton';
 import type { PrintPipelineState } from './types';
 
 interface PrintProgressViewProps {
   state: PrintPipelineState;
+  onDismiss?: () => void;
 }
 
 const STAGE_LABELS: Record<PrintPipelineState['stage'], string> = {
@@ -15,7 +17,7 @@ const STAGE_LABELS: Record<PrintPipelineState['stage'], string> = {
   error: 'Print failed',
 };
 
-export function PrintProgressView({ state }: PrintProgressViewProps): React.JSX.Element | null {
+export function PrintProgressView({ state, onDismiss }: PrintProgressViewProps): React.JSX.Element | null {
   if (state.stage === 'idle') {
     return null;
   }
@@ -25,10 +27,13 @@ export function PrintProgressView({ state }: PrintProgressViewProps): React.JSX.
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        {state.stage !== 'done' && state.stage !== 'error' && (
-          <ActivityIndicator size="small" style={styles.spinner} />
-        )}
-        <Text style={styles.stageLabel}>{STAGE_LABELS[state.stage]}</Text>
+        <View style={styles.headerLeft}>
+          {state.stage !== 'done' && state.stage !== 'error' && (
+            <ActivityIndicator size="small" style={styles.spinner} />
+          )}
+          <Text style={styles.stageLabel}>{STAGE_LABELS[state.stage]}</Text>
+        </View>
+        {onDismiss != null && <CloseButton onPress={onDismiss} />}
       </View>
 
       {state.stage === 'rasterizing' && state.totalPages > 0 && (
@@ -73,6 +78,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
   },

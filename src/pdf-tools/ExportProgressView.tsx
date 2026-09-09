@@ -1,9 +1,11 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { CloseButton } from '../ui/CloseButton';
 import type { ExportPipelineState } from './types';
 
 interface ExportProgressViewProps {
   state: ExportPipelineState;
+  onDismiss?: () => void;
 }
 
 function stageLabel(state: ExportPipelineState): string {
@@ -25,18 +27,23 @@ function stageLabel(state: ExportPipelineState): string {
   }
 }
 
-export function ExportProgressView({ state }: ExportProgressViewProps): React.JSX.Element | null {
+export function ExportProgressView({ state, onDismiss }: ExportProgressViewProps): React.JSX.Element | null {
   if (state.stage === 'idle') {
     return null;
   }
 
+  const canDismiss = onDismiss != null && (state.stage === 'done' || state.stage === 'error');
+
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        {state.stage !== 'done' && state.stage !== 'error' && (
-          <ActivityIndicator size="small" style={styles.spinner} />
-        )}
-        <Text style={styles.stageLabel}>{stageLabel(state)}</Text>
+        <View style={styles.headerLeft}>
+          {state.stage !== 'done' && state.stage !== 'error' && (
+            <ActivityIndicator size="small" style={styles.spinner} />
+          )}
+          <Text style={styles.stageLabel}>{stageLabel(state)}</Text>
+        </View>
+        {canDismiss && <CloseButton onPress={onDismiss} />}
       </View>
 
       {state.stage === 'rendering' && state.kind === 'images' && state.totalPages > 0 && (
@@ -61,6 +68,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
   },

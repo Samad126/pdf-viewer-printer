@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { CloseButton } from '../ui/CloseButton';
 import { parsePageRangeInput } from './pageRange';
 import { DEFAULT_IPP_PRINT_OPTIONS, IppPrintOptions } from './types';
 
@@ -77,7 +78,10 @@ export function PrintOptionsView({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Print options</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Print options</Text>
+        <CloseButton onPress={onCancel} />
+      </View>
 
       <Text style={styles.label}>Copies</Text>
       <View style={styles.stepperRow}>
@@ -175,11 +179,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#101418',
     borderRadius: 12,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   title: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 8,
   },
   label: {
     color: '#a0a8b4',
