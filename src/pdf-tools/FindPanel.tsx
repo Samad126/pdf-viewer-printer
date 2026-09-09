@@ -1,14 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  KeyboardAvoidingView,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { closePdfDocument, openPdfDocument } from '../pdf/NativePdfiumModule';
 import { CloseButton } from '../ui/CloseButton';
 import { findTextInPdf } from './NativePdfTextModule';
@@ -127,7 +118,7 @@ export function FindPanel({ filePath, onJumpToPage, onClose }: FindPanelProps): 
   }, [query, phase]);
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior="height">
+    <View style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Find in document</Text>
         <CloseButton onPress={onClose} />
@@ -170,6 +161,7 @@ export function FindPanel({ filePath, onJumpToPage, onClose }: FindPanelProps): 
       {matches.length > 0 && (
         <FlatList
           style={styles.list}
+          keyboardShouldPersistTaps="handled"
           data={matches}
           keyExtractor={(item, index) => `${item.pageIndex}-${index}`}
           renderItem={({ item }) => {
@@ -193,16 +185,17 @@ export function FindPanel({ filePath, onJumpToPage, onClose }: FindPanelProps): 
           }}
         />
       )}
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
     backgroundColor: '#101418',
     borderRadius: 12,
-    maxHeight: '70%',
     padding: 16,
+    overflow: 'hidden',
   },
   headerRow: {
     flexDirection: 'row',
@@ -243,6 +236,7 @@ const styles = StyleSheet.create({
   },
   list: {
     marginTop: 4,
+    flexShrink: 1,
   },
   resultRow: {
     paddingVertical: 10,

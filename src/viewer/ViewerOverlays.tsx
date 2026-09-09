@@ -1,12 +1,14 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import type { TableContent } from 'react-native-pdf';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ExportProgressView, FindPanel } from '../pdf-tools';
 import { PrintProgressView } from '../print/PrintProgressView';
 import { IppPrintProgressView } from '../printers/IppPrintProgressView';
 import { PrintOptionsView } from '../printers/PrintOptionsView';
 import { PrinterPickerView } from '../printers/PrinterPickerView';
 import { CloseButton } from '../ui/CloseButton';
+import { useKeyboardHeight } from '../ui/useKeyboardHeight';
 import { MoreActionsMenu } from './MoreActionsMenu';
 import { TableOfContentsPanel } from './TableOfContentsPanel';
 import type { UsePrintFlowResult } from './usePrintFlow';
@@ -27,6 +29,10 @@ interface ViewerOverlaysProps {
  * than being reconstructed at each call site.
  */
 export function ViewerOverlays({ filePath, pageCount, tableContents, print, tools }: ViewerOverlaysProps): React.JSX.Element | null {
+  const keyboardHeight = useKeyboardHeight();
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+
   if (print.showPrintChoice) {
     return (
       <View style={styles.overlay}>
@@ -56,8 +62,19 @@ export function ViewerOverlays({ filePath, pageCount, tableContents, print, tool
   }
 
   if (tools.showFindPanel) {
+    // Anchored a fixed distance above the keyboard (like the other overlays' `bottom: 40`) and
+    // sized to a modest, capped height - not stretched to fill the whole space down to the
+    // keyboard, which looked like an oversized, mostly-empty box before any results existed. `top`
+    // is only ever pulled down as far as `minTop` (clearing the header) if a tall keyboard would
+    // otherwise leave less room than DESIRED_HEIGHT - the panel shrinks to fit rather than ever
+    // pushing its own header/input off the top of the screen, which is what an earlier version
+    // that only moved `bottom` (with an intrinsic percentage-based height) got wrong.
+    const bottom = 40 + keyboardHeight;
+    const minTop = insets.top + 64;
+    const desiredHeight = Math.min(windowHeight * 0.5, 420);
+    const top = Math.max(minTop, windowHeight - bottom - desiredHeight);
     return (
-      <View style={styles.overlay}>
+      <View style={[styles.findOverlay, { top, bottom }]}>
         <FindPanel filePath={filePath} onJumpToPage={tools.handleJumpFromFind} onClose={tools.closeFindPanel} />
       </View>
     );
@@ -135,6 +152,11 @@ const styles = StyleSheet.create({
     left: 12,
     right: 12,
     bottom: 40,
+  },
+  findOverlay: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
   },
   shareErrorBox: {
     padding: 16,

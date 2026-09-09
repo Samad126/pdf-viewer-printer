@@ -1,15 +1,19 @@
+import { saveDocuments } from '@react-native-documents/picker';
+import Slider from '@react-native-community/slider';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   FlatList,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
-import type { ListViewToken } from 'react-native';
+import type { GestureResponderEvent, ListViewToken } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnnotatePageItem, PAGE_ROW_GAP } from './AnnotatePageItem';
@@ -19,6 +23,8 @@ import { DEFAULT_PRINT_DPI } from '../pdf/types';
 import type { AnnotationPageInput } from './NativeAnnotationModule';
 import { saveAnnotatedPdf } from './NativeAnnotationModule';
 import type { PageAnnotations, Stroke } from './types';
+import { clamp, IDENTITY_ZOOM, MAX_ZOOM, MIN_ZOOM, touchDistance, touchMidpoint } from './zoomMath';
+import type { ZoomState } from './zoomMath';
 
 interface AnnotateScreenProps {
   filePath: string;
@@ -39,11 +45,12 @@ const ESTIMATED_PAGE_ASPECT_RATIO = Math.sqrt(2);
 
 const COLOR_PRESETS = ['#000000', '#e63946', '#1d4ed8', '#16a34a', '#eab308', '#f97316'];
 
-const STROKE_WIDTH_PRESETS: { label: string; value: number }[] = [
-  { label: 'Thin', value: 2 },
-  { label: 'Medium', value: 4 },
-  { label: 'Thick', value: 8 },
-];
+const MIN_STROKE_WIDTH = 1;
+const MAX_STROKE_WIDTH = 24;
+const DEFAULT_STROKE_WIDTH = 4;
+// Cosmetic floor only, for the brush-size preview dot's rendered size - MIN_STROKE_WIDTH itself
+// (1px) would be barely visible as a dot, but strokes are still drawn at the real, unclamped value.
+const MIN_PREVIEW_DOT_SIZE = 6;
 
 function computePageSize(naturalWidth: number, naturalHeight: number, maxWidth: number): PageCanvasSize {
   const safeMaxWidth = Math.max(maxWidth, 1);
@@ -53,6 +60,26 @@ function computePageSize(naturalWidth: number, naturalHeight: number, maxWidth: 
 
 function clampPageIndex(index: number, pageCount: number): number {
   return Math.min(Math.max(index, 0), Math.max(pageCount - 1, 0));
+}
+
+// fileName is typically derived from a file:// URI's last path segment (percent-encoded per RFC
+// 3986), so it may still contain e.g. %20 - decode it for anything written as a new file name.
+function safeDecodeFileName(rawName: string): string {
+  try {
+    return decodeURIComponent(rawName);
+  } catch {
+    return rawName;
+  }
+}
+
+// saveDocuments' sourceUris must be percent-encoded URIs (it hands them straight to
+// Uri.parse/ContentResolver on the native side), not plain filesystem paths.
+function toFileUri(path: string): string {
+  return `file://${encodeURI(path)}`;
+}
+
+function stripPdfExtension(name: string): string {
+  return name.replace(/\.pdf$/i, '');
 }
 
 export function AnnotateScreen({
@@ -77,7 +104,7 @@ export function AnnotateScreen({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeColor, setActiveColor] = useState<string>(COLOR_PRESETS[0]);
-  const [activeStrokeWidth, setActiveStrokeWidth] = useState<number>(STROKE_WIDTH_PRESETS[1].value);
+  const [activeStrokeWidth, setActiveStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
 
   const handleRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
@@ -90,6 +117,111 @@ export function AnnotateScreen({
   // DrawingCanvas's onPanResponderMove comment), so one pageDpi value stays valid for every stroke
   // on a page no matter when, or how much, the user zoomed while drawing it.
   const pageDpiMapRef = useRef<Record<number, number>>({});
+
+  // Whole-document pinch-to-zoom/pan state, applied to a wrapper View around the entire FlatList
+  // (not per-page - see zoomResponder below for the gesture-capture rules).
+  const [zoom, setZoom] = useState<ZoomState>(IDENTITY_ZOOM);
+  const zoomRef = useRef(zoom);
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  const pinchStartRef = useRef<{
+    distance: number;
+    focal: { x: number; y: number };
+    zoomAtStart: ZoomState;
+  } | null>(null);
+  // Tracks how many touches the previous move event had, so a finger being lifted or re-added
+  // mid-gesture (without a full release - e.g. a pinch where one finger briefly lifts) is detected
+  // and pinchStartRef is rebuilt from that point, rather than continuing to compute against a
+  // now-stale distance/focal from a completely different touch configuration. An earlier version
+  // only ever set pinchStartRef once, in onPanResponderGrant, which only fires at the very start of
+  // a gesture - any later change in touch count reused that first baseline regardless of how stale
+  // it had become, which is what caused pinching/panning to occasionally snap or feel stuck.
+  const lastTouchCountRef = useRef(0);
+
+  const resetZoom = useCallback(() => {
+    setZoom(IDENTITY_ZOOM);
+  }, []);
+
+  // Gesture rules - deliberately simple: only ever reacts to 2+ fingers, via the capture phase,
+  // which reliably wins immediately regardless of what's underneath (unlike trying to claim a
+  // single finger conditionally in the bubble phase, which went through two rounds of subtle bugs
+  // fighting over the same touch with the FlatList's own native scroll and never became reliable).
+  // - 2 fingers, any mode: captures and drives pinch-zoom, tracking the two-finger midpoint's
+  //   movement so pinching also pans in any direction - including without changing distance, a
+  //   plain 2-finger drag pans without zooming. This is how to reach a corner: pinch/drag toward
+  //   it.
+  // - 1 finger, any mode, any zoom level: never captures, ever. In Draw mode it falls through to
+  //   DrawingCanvas (queried before this wrapper's, since RN asks the deepest view first). In
+  //   Scroll mode it falls through to the FlatList's own native scroll (scrollEnabled is always
+  //   true, unconditionally - vertical movement is 100% the list's job at any zoom level, never
+  //   this responder's).
+  const zoomResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: (evt: GestureResponderEvent) =>
+        evt.nativeEvent.touches.length >= 2,
+      onMoveShouldSetPanResponderCapture: (evt: GestureResponderEvent) =>
+        evt.nativeEvent.touches.length >= 2,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (evt: GestureResponderEvent) => {
+        const { touches } = evt.nativeEvent;
+        lastTouchCountRef.current = touches.length;
+        if (touches.length >= 2) {
+          pinchStartRef.current = {
+            distance: touchDistance(touches[0], touches[1]),
+            focal: touchMidpoint(touches[0], touches[1]),
+            zoomAtStart: zoomRef.current,
+          };
+        }
+      },
+      onPanResponderMove: (evt: GestureResponderEvent) => {
+        const { touches } = evt.nativeEvent;
+        if (touches.length >= 2 && lastTouchCountRef.current < 2) {
+          // Regained a second finger without a full release - fresh baseline from here.
+          pinchStartRef.current = {
+            distance: touchDistance(touches[0], touches[1]),
+            focal: touchMidpoint(touches[0], touches[1]),
+            zoomAtStart: zoomRef.current,
+          };
+        }
+        lastTouchCountRef.current = touches.length;
+        if (touches.length < 2) return;
+
+        const pinchStart = pinchStartRef.current;
+        if (pinchStart == null || pinchStart.distance === 0) return;
+
+        const currentDistance = touchDistance(touches[0], touches[1]);
+        const currentFocal = touchMidpoint(touches[0], touches[1]);
+        const nextScale = clamp(
+          pinchStart.zoomAtStart.scale * (currentDistance / pinchStart.distance),
+          MIN_ZOOM,
+          MAX_ZOOM,
+        );
+
+        // Snapping all the way back to IDENTITY_ZOOM (not just scale) the moment a pinch-out
+        // reaches the floor matters: leaving a stale translate in state while only scale read back
+        // as 1 caused the next zoom-in to jump from that invisible old offset.
+        if (nextScale <= MIN_ZOOM) {
+          setZoom(IDENTITY_ZOOM);
+        } else {
+          setZoom({
+            scale: nextScale,
+            translateX: pinchStart.zoomAtStart.translateX + (currentFocal.x - pinchStart.focal.x),
+            translateY: pinchStart.zoomAtStart.translateY + (currentFocal.y - pinchStart.focal.y),
+          });
+        }
+      },
+      onPanResponderRelease: () => {
+        pinchStartRef.current = null;
+        lastTouchCountRef.current = 0;
+      },
+      onPanResponderTerminate: () => {
+        pinchStartRef.current = null;
+        lastTouchCountRef.current = 0;
+      },
+    }),
+  ).current;
 
   useEffect(() => {
     handleRef.current = handle;
@@ -176,13 +308,13 @@ export function AnnotateScreen({
     });
   }, [activePageIndex]);
 
-  const handleClearPage = useCallback(() => {
-    setPageAnnotations(previous => {
-      const pageStrokes = previous[activePageIndex] ?? [];
-      if (pageStrokes.length === 0) return previous;
-      return { ...previous, [activePageIndex]: [] };
-    });
-  }, [activePageIndex]);
+  const handleClearAll = useCallback(() => {
+    if (!hasUnsavedStrokes) return;
+    Alert.alert('Clear all drawings?', 'This removes every drawing on every page of this document.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Clear all', style: 'destructive', onPress: () => setPageAnnotations({}) },
+    ]);
+  }, [hasUnsavedStrokes]);
 
   const handleClose = useCallback(() => {
     if (hasUnsavedStrokes) {
@@ -198,6 +330,18 @@ export function AnnotateScreen({
       onClose();
     }
   }, [hasUnsavedStrokes, onClose]);
+
+  // Registered while this screen is mounted, so it takes priority over ViewerScreen's own listener
+  // (BackHandler dispatches to the most-recently-registered listener first) - back always means
+  // "try to close annotate" here, same as the header's Close button (including the discard-confirm
+  // Alert), never falls through to closing the viewer/app in the same press.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleClose();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [handleClose]);
 
   const handleSave = useCallback(async () => {
     if (isSaving) return;
@@ -223,13 +367,22 @@ export function AnnotateScreen({
         })
         .filter(entry => entry.strokes.length > 0);
 
-      const baseName = fileName.replace(/\.pdf$/i, '');
+      const baseName = stripPdfExtension(safeDecodeFileName(fileName)) || 'document';
       const outputPath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${baseName}-annotated-${Date.now()}.pdf`;
 
       const result = await saveAnnotatedPdf(saveHandle, DEFAULT_PRINT_DPI, outputPath, pageAnnotationsPayload);
 
       await closePdfDocument(saveHandle).catch(() => undefined);
       saveHandle = null;
+
+      // The rendered file above always lands in app-private cache first (saveAnnotatedPdf needs a
+      // real path to write to) - saveDocuments then lets the user pick where it actually ends up,
+      // mirroring the same two-step pattern ../pdf-tools/exportPdf.ts uses for exported files.
+      await saveDocuments({
+        sourceUris: [toFileUri(result.outputPath)],
+        mimeType: 'application/pdf',
+        fileName: `${baseName}-annotated.pdf`,
+      });
 
       setIsSaving(false);
       onSaved(`file://${result.outputPath}`);
@@ -315,20 +468,32 @@ export function AnnotateScreen({
         {handle == null ? (
           <ActivityIndicator size="large" color="#2f6fed" />
         ) : (
-          <FlatList
-            data={pageIndices}
-            keyExtractor={keyExtractor}
-            renderItem={renderItem}
-            getItemLayout={getItemLayout}
-            initialScrollIndex={clampedInitialPage}
-            initialNumToRender={3}
-            windowSize={5}
-            maxToRenderPerBatch={2}
-            removeClippedSubviews
-            viewabilityConfig={viewabilityConfig}
-            onViewableItemsChanged={onViewableItemsChanged}
-            contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 16 }]}
-          />
+          <View
+            style={[
+              styles.zoomWrapper,
+              {
+                // scale first, then translate, so translateX/Y land in screen pixels (see
+                // zoomMath.ts) rather than being multiplied by scale.
+                transform: [{ scale: zoom.scale }, { translateX: zoom.translateX }, { translateY: zoom.translateY }],
+              },
+            ]}
+            {...zoomResponder.panHandlers}
+          >
+            <FlatList
+              data={pageIndices}
+              keyExtractor={keyExtractor}
+              renderItem={renderItem}
+              getItemLayout={getItemLayout}
+              initialScrollIndex={clampedInitialPage}
+              initialNumToRender={3}
+              windowSize={5}
+              maxToRenderPerBatch={2}
+              removeClippedSubviews
+              viewabilityConfig={viewabilityConfig}
+              onViewableItemsChanged={onViewableItemsChanged}
+              contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 16 }]}
+            />
+          </View>
         )}
         {handle != null && pageCount > 0 && (
           <View style={styles.pageBadge} pointerEvents="none">
@@ -363,6 +528,11 @@ export function AnnotateScreen({
           >
             <Text style={styles.modeLabel}>Scroll</Text>
           </Pressable>
+          {zoom.scale > 1 && (
+            <Pressable onPress={resetZoom} style={styles.modeButton}>
+              <Text style={styles.modeLabel}>Reset zoom</Text>
+            </Pressable>
+          )}
         </View>
         <View style={styles.colorRow}>
           {COLOR_PRESETS.map(color => (
@@ -377,25 +547,39 @@ export function AnnotateScreen({
             />
           ))}
         </View>
-        <View style={styles.widthRow}>
-          {STROKE_WIDTH_PRESETS.map(preset => (
-            <Pressable
-              key={preset.label}
-              onPress={() => setActiveStrokeWidth(preset.value)}
-              style={[styles.widthButton, activeStrokeWidth === preset.value && styles.widthButtonActive]}
-            >
-              <Text style={styles.widthLabel}>{preset.label}</Text>
-            </Pressable>
-          ))}
+        <View style={styles.brushSizeRow}>
+          <View
+            style={[
+              styles.brushPreviewDot,
+              {
+                width: Math.max(activeStrokeWidth, MIN_PREVIEW_DOT_SIZE),
+                height: Math.max(activeStrokeWidth, MIN_PREVIEW_DOT_SIZE),
+                borderRadius: Math.max(activeStrokeWidth, MIN_PREVIEW_DOT_SIZE) / 2,
+                backgroundColor: activeColor,
+              },
+            ]}
+          />
+          <Slider
+            style={styles.brushSlider}
+            minimumValue={MIN_STROKE_WIDTH}
+            maximumValue={MAX_STROKE_WIDTH}
+            step={1}
+            value={activeStrokeWidth}
+            onValueChange={setActiveStrokeWidth}
+            minimumTrackTintColor="#2f6fed"
+            maximumTrackTintColor="#1c2128"
+            thumbTintColor="#2f6fed"
+          />
+          <Text style={styles.brushSizeValue}>{activeStrokeWidth}px</Text>
+        </View>
+        <View style={styles.actionsRow}>
           <Pressable onPress={handleUndo} disabled={currentStrokes.length === 0} style={styles.actionButton}>
             <Text style={[styles.actionLabel, currentStrokes.length === 0 && styles.actionLabelDisabled]}>
               Undo
             </Text>
           </Pressable>
-          <Pressable onPress={handleClearPage} disabled={currentStrokes.length === 0} style={styles.actionButton}>
-            <Text style={[styles.actionLabel, currentStrokes.length === 0 && styles.actionLabelDisabled]}>
-              Clear
-            </Text>
+          <Pressable onPress={handleClearAll} disabled={!hasUnsavedStrokes} style={styles.actionButton}>
+            <Text style={[styles.actionLabel, !hasUnsavedStrokes && styles.actionLabelDisabled]}>Clear all</Text>
           </Pressable>
         </View>
       </View>
@@ -450,6 +634,9 @@ const styles = StyleSheet.create({
   canvasArea: {
     flex: 1,
     backgroundColor: '#4b4f56',
+  },
+  zoomWrapper: {
+    flex: 1,
   },
   listContent: {
     alignItems: 'center',
@@ -516,24 +703,28 @@ const styles = StyleSheet.create({
   colorSwatchActive: {
     borderColor: '#ffffff',
   },
-  widthRow: {
+  brushSizeRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 10,
   },
-  widthButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#1c2128',
-    marginRight: 8,
+  brushPreviewDot: {
+    marginRight: 10,
   },
-  widthButtonActive: {
-    backgroundColor: '#2f6fed',
+  brushSlider: {
+    flex: 1,
   },
-  widthLabel: {
+  brushSizeValue: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '600',
+    marginLeft: 8,
+    width: 36,
+    textAlign: 'right',
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   actionButton: {
     paddingHorizontal: 12,

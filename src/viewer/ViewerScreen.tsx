@@ -1,5 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, BackHandler, StyleSheet, Text, View } from 'react-native';
 import Pdf from 'react-native-pdf';
 import type { PdfError, PdfRef, TableContent } from 'react-native-pdf';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,6 +34,41 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
     pdfRef,
     onRequestAnnotate: () => setShowAnnotate(true),
   });
+
+  // Closes whichever single overlay ViewerOverlays currently has priority-picked (see the same
+  // if-chain there), so back mirrors what the overlay's own X button/Cancel would do; if nothing
+  // is open, falls through (returns false) to App.tsx's listener, which navigates back to Home.
+  // Registered on mount (before AnnotateScreen could ever be shown), so AnnotateScreen's own
+  // listener - added later, when the user opens it - correctly takes priority while it's mounted.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (print.showPrintChoice) {
+        print.closePrintChoice();
+      } else if (tools.showMoreMenu) {
+        tools.closeMoreMenu();
+      } else if (tools.showTableOfContents) {
+        tools.closeTableOfContents();
+      } else if (tools.showFindPanel) {
+        tools.closeFindPanel();
+      } else if (print.showPrinterPicker) {
+        print.handleClosePrinterPicker();
+      } else if (print.printOptionsTarget != null) {
+        print.handleCancelPrintOptions();
+      } else if (tools.exportState.stage !== 'idle') {
+        tools.resetExport();
+      } else if (tools.shareError != null) {
+        tools.closeShareError();
+      } else if (print.printState.stage !== 'idle') {
+        print.dismissPrint();
+      } else if (print.ippState.stage !== 'idle') {
+        print.dismissIppPrint();
+      } else {
+        return false;
+      }
+      return true;
+    });
+    return () => subscription.remove();
+  }, [print, tools]);
 
   const handleLoadComplete = useCallback(
     (numberOfPages: number, _path: string, _size: { width: number; height: number }, contents?: TableContent[]) => {
