@@ -1,8 +1,10 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Pdf from 'react-native-pdf';
-import type { PdfError } from 'react-native-pdf';
+import type { PdfError, PdfRef, TableContent } from 'react-native-pdf';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AnnotateScreen } from '../annotate/AnnotateScreen';
+import { ExportProgressView, FindPanel, sharePdf, useExportPdf } from '../pdf-tools';
 import { PrintProgressView } from '../print/PrintProgressView';
 import { usePrintPipeline } from '../print/usePrintPipeline';
 import { IppPrintProgressView } from '../printers/IppPrintProgressView';
@@ -11,6 +13,9 @@ import { PrinterPickerView } from '../printers/PrinterPickerView';
 import { useIppDiscovery } from '../printers/useIppDiscovery';
 import { useIppPrintPipeline } from '../printers/useIppPrintPipeline';
 import type { IppPrintOptions, IppPrinterTarget } from '../printers/types';
+import { MoreActionsMenu, MoreActionsMenuItem } from './MoreActionsMenu';
+import { NightModeOverlay } from './NightModeOverlay';
+import { TableOfContentsPanel } from './TableOfContentsPanel';
 
 interface ViewerScreenProps {
   filePath: string;
@@ -24,6 +29,15 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showPrinterPicker, setShowPrinterPicker] = useState(false);
   const [printOptionsTarget, setPrintOptionsTarget] = useState<IppPrinterTarget | null>(null);
+  const [tableContents, setTableContents] = useState<TableContent[]>([]);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showTableOfContents, setShowTableOfContents] = useState(false);
+  const [showFindPanel, setShowFindPanel] = useState(false);
+  const [showAnnotate, setShowAnnotate] = useState(false);
+  const [nightMode, setNightMode] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const pdfRef = useRef<PdfRef>(null);
   const { state, startPrint, reset } = usePrintPipeline();
   const discovery = useIppDiscovery();
   const {
@@ -32,10 +46,92 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
     cancel: cancelIppPrint,
     reset: resetIppPrint,
   } = useIppPrintPipeline();
+  const { state: exportState, exportAsImages, exportAsText, reset: resetExport } = useExportPdf();
 
-  const handleLoadComplete = useCallback((numberOfPages: number) => {
-    setPageCount(numberOfPages);
+  const handleLoadComplete = useCallback(
+    (numberOfPages: number, _path: string, _size: { width: number; height: number }, contents?: TableContent[]) => {
+      setPageCount(numberOfPages);
+      setTableContents(contents ?? []);
+    },
+    [],
+  );
+
+  const handleSelectTocPage = useCallback((pageIndex: number) => {
+    setShowTableOfContents(false);
+    pdfRef.current?.setPage(pageIndex + 1);
   }, []);
+
+  const handleJumpFromFind = useCallback((pageIndex: number) => {
+    setShowFindPanel(false);
+    pdfRef.current?.setPage(pageIndex + 1);
+  }, []);
+
+  const handleShare = useCallback(() => {
+    setShareError(null);
+    setIsSharing(true);
+    sharePdf(filePath, fileName)
+      .catch(error => {
+        setShareError(error instanceof Error ? error.message : 'Failed to share this PDF.');
+      })
+      .finally(() => setIsSharing(false));
+  }, [filePath, fileName]);
+
+  const handleExportImages = useCallback(() => {
+    resetExport();
+    exportAsImages(filePath, fileName, pageCount ?? 0).catch(() => undefined);
+  }, [exportAsImages, filePath, fileName, pageCount, resetExport]);
+
+  const handleExportText = useCallback(() => {
+    resetExport();
+    exportAsText(filePath, fileName, pageCount ?? 0).catch(() => undefined);
+  }, [exportAsText, filePath, fileName, pageCount, resetExport]);
+
+  const handleAnnotateSaved = useCallback(() => {
+    setShowAnnotate(false);
+  }, []);
+
+  const moreActionsItems: MoreActionsMenuItem[] = [
+    {
+      key: 'contents',
+      label: 'Table of contents',
+      disabled: tableContents.length === 0,
+      onPress: () => setShowTableOfContents(true),
+    },
+    {
+      key: 'find',
+      label: 'Find in document',
+      onPress: () => setShowFindPanel(true),
+    },
+    {
+      key: 'annotate',
+      label: 'Draw / Annotate',
+      disabled: pageCount == null || pageCount === 0,
+      onPress: () => setShowAnnotate(true),
+    },
+    {
+      key: 'share',
+      label: 'Share…',
+      disabled: isSharing,
+      onPress: handleShare,
+    },
+    {
+      key: 'export-images',
+      label: 'Export as images',
+      disabled: pageCount == null || pageCount === 0,
+      onPress: handleExportImages,
+    },
+    {
+      key: 'export-text',
+      label: 'Export as text',
+      disabled: pageCount == null || pageCount === 0,
+      onPress: handleExportText,
+    },
+    {
+      key: 'night-mode',
+      label: nightMode ? 'Night mode: On' : 'Night mode: Off',
+      onPress: () => setNightMode(previous => !previous),
+    },
+  ];
 
   const handleError = useCallback((error: PdfError) => {
     setLoadError(error.message ?? 'Failed to load PDF');
@@ -95,6 +191,51 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
   const isBusy = isPrintBusy || isIppBusy || isOptionsOpen;
   const insets = useSafeAreaInsets();
 
+  type OverlayKind =
+    | 'none'
+    | 'more-menu'
+    | 'table-of-contents'
+    | 'find'
+    | 'printer-picker'
+    | 'print-options'
+    | 'export'
+    | 'share-error'
+    | 'print-progress'
+    | 'ipp-progress';
+
+  const activeOverlay: OverlayKind = showMoreMenu
+    ? 'more-menu'
+    : showTableOfContents
+      ? 'table-of-contents'
+      : showFindPanel
+        ? 'find'
+        : showPrinterPicker
+          ? 'printer-picker'
+          : printOptionsTarget != null
+            ? 'print-options'
+            : exportState.stage !== 'idle'
+              ? 'export'
+              : shareError != null
+                ? 'share-error'
+                : state.stage !== 'idle'
+                  ? 'print-progress'
+                  : ippState.stage !== 'idle'
+                    ? 'ipp-progress'
+                    : 'none';
+
+  if (showAnnotate) {
+    return (
+      <AnnotateScreen
+        filePath={filePath}
+        fileName={fileName}
+        pageCount={pageCount ?? 0}
+        initialPage={Math.max(currentPage - 1, 0)}
+        onClose={() => setShowAnnotate(false)}
+        onSaved={handleAnnotateSaved}
+      />
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
@@ -119,6 +260,9 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
           >
             <Text style={styles.printLabel}>Print</Text>
           </Pressable>
+          <Pressable onPress={() => setShowMoreMenu(true)} hitSlop={12} style={styles.moreButton}>
+            <Text style={styles.moreLabel}>⋯</Text>
+          </Pressable>
         </View>
       </View>
 
@@ -128,6 +272,7 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         </View>
       ) : (
         <Pdf
+          ref={pdfRef}
           source={{ uri: filePath }}
           style={styles.pdf}
           onLoadComplete={handleLoadComplete}
@@ -141,6 +286,8 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         />
       )}
 
+      {nightMode && loadError == null && <NightModeOverlay />}
+
       {pageCount != null && (
         <View style={styles.pageIndicator}>
           <Text style={styles.pageIndicatorText}>
@@ -149,7 +296,29 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         </View>
       )}
 
-      {showPrinterPicker && (
+      {activeOverlay === 'more-menu' && (
+        <View style={styles.progressOverlay}>
+          <MoreActionsMenu items={moreActionsItems} onClose={() => setShowMoreMenu(false)} />
+        </View>
+      )}
+
+      {activeOverlay === 'table-of-contents' && (
+        <View style={styles.progressOverlay}>
+          <TableOfContentsPanel
+            entries={tableContents}
+            onSelectPage={handleSelectTocPage}
+            onClose={() => setShowTableOfContents(false)}
+          />
+        </View>
+      )}
+
+      {activeOverlay === 'find' && (
+        <View style={styles.progressOverlay}>
+          <FindPanel filePath={filePath} onJumpToPage={handleJumpFromFind} onClose={() => setShowFindPanel(false)} />
+        </View>
+      )}
+
+      {activeOverlay === 'printer-picker' && (
         <View style={styles.progressOverlay}>
           <PrinterPickerView discovery={discovery.state} onSelect={handleSelectPrinter} disabled={isBusy} />
           <Pressable onPress={handleClosePrinterPicker} style={styles.cancelPickerButton}>
@@ -158,7 +327,7 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         </View>
       )}
 
-      {!showPrinterPicker && printOptionsTarget != null && (
+      {activeOverlay === 'print-options' && (
         <View style={styles.progressOverlay}>
           <PrintOptionsView
             pageCount={pageCount ?? 0}
@@ -168,13 +337,35 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         </View>
       )}
 
-      {!showPrinterPicker && printOptionsTarget == null && state.stage !== 'idle' && (
+      {activeOverlay === 'export' && (
+        <View style={styles.progressOverlay}>
+          <ExportProgressView state={exportState} />
+          {exportState.stage === 'done' || exportState.stage === 'error' ? (
+            <Pressable onPress={resetExport} style={styles.cancelPickerButton}>
+              <Text style={styles.cancelPickerLabel}>Close</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+
+      {activeOverlay === 'share-error' && (
+        <View style={styles.progressOverlay}>
+          <View style={styles.shareErrorBox}>
+            <Text style={styles.errorText}>{shareError}</Text>
+          </View>
+          <Pressable onPress={() => setShareError(null)} style={styles.cancelPickerButton}>
+            <Text style={styles.cancelPickerLabel}>Close</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {activeOverlay === 'print-progress' && (
         <View style={styles.progressOverlay}>
           <PrintProgressView state={state} />
         </View>
       )}
 
-      {!showPrinterPicker && printOptionsTarget == null && state.stage === 'idle' && ippState.stage !== 'idle' && (
+      {activeOverlay === 'ipp-progress' && (
         <View style={styles.progressOverlay}>
           <IppPrintProgressView state={ippState} onCancel={handleCancelIppPrint} />
         </View>
@@ -227,6 +418,19 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
   },
+  moreButton: {
+    marginLeft: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1c2128',
+  },
+  moreLabel: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
   pdf: {
     flex: 1,
     width: '100%',
@@ -265,6 +469,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
     alignItems: 'center',
     paddingVertical: 10,
+  },
+  shareErrorBox: {
+    padding: 16,
+    backgroundColor: '#101418',
+    borderRadius: 12,
   },
   cancelPickerLabel: {
     color: '#a0a8b4',
