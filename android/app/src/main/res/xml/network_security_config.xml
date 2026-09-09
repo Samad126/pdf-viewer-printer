@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allows plain-HTTP (cleartext) connections app-wide via base-config, rather than scoping
+  cleartext to a specific domain with a domain-config entry.
+
+  This is intentionally coarser than the "only allow cleartext to the exact host you need"
+  pattern usually recommended for network security config. A domain-config is matched by
+  hostname, but the one and only place this app ever makes a cleartext connection is
+  IppHttpClient, talking directly to a printer's IP address obtained at runtime - either
+  resolved via mDNS/NSD or typed in manually by the user - never a hostname known ahead of
+  time at build time. Android's network security config has no mechanism to scope a
+  domain-config entry to an IP address or CIDR range, and it does not evaluate domain-config
+  entries against literal IP-address connections at all in the way one might expect for a
+  ".local" suffix, since printers are dialed by IP, not by ".local" hostname, in this app's
+  flow. A domain-config scoped to e.g. "local" would therefore not actually cover this
+  traffic and would give a false sense of a tighter boundary than actually exists.
+
+  The real safety boundary is therefore enforced in application code, not in this file:
+  cleartext HTTP is only ever issued by IppHttpClient, and only when the user explicitly
+  taps "Print directly" to submit a job to a printer they picked or typed in - never for any
+  other network traffic in this app (PDF loading, HomeScreen, etc. never touch the network).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
