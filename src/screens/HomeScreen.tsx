@@ -3,7 +3,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AboutModal } from '../ui/AboutModal';
-import { CloseButton } from '../ui/CloseButton';
 import { RecentFilesScreen } from './RecentFilesScreen';
 import { RecentThumbnail } from './RecentThumbnail';
 import { loadRecentFiles, removeRecentFile } from './recentFiles';
@@ -110,9 +109,13 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
                     width={CARD_THUMBNAIL_WIDTH}
                     height={CARD_THUMBNAIL_HEIGHT}
                   />
-                  <View style={styles.recentRemoveButton}>
-                    <CloseButton onPress={() => handleRemoveRecent(file.path)} />
-                  </View>
+                  <Pressable
+                    style={styles.recentRemoveButton}
+                    onPress={() => handleRemoveRecent(file.path)}
+                    hitSlop={10}
+                  >
+                    <Text style={styles.recentRemoveIcon}>✕</Text>
+                  </Pressable>
                 </View>
                 <Text style={styles.recentCardName} numberOfLines={1}>
                   {file.name}
@@ -208,14 +211,22 @@ const styles = StyleSheet.create({
   },
   recentRemoveButton: {
     position: 'absolute',
-    top: -8,
-    right: -8,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    top: -7,
+    right: -7,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: '#101418',
+    borderWidth: 1,
+    borderColor: '#2a2f36',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  recentRemoveIcon: {
+    color: '#a0a8b4',
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 9,
   },
   recentCardName: {
     color: '#d0d5dd',
