@@ -1,12 +1,14 @@
 import React, { useEffect } from 'react';
 import { BackHandler, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CloseButton } from '../ui/CloseButton';
 import { RecentThumbnail } from './RecentThumbnail';
 import type { RecentFile } from './recentFiles';
 
 interface RecentFilesScreenProps {
   files: RecentFile[];
   onSelectFile: (path: string, name: string) => void;
+  onRemoveFile: (path: string) => void;
   onClose: () => void;
 }
 
@@ -25,7 +27,12 @@ function formatRelativeTime(timestampMs: number): string {
   return new Date(timestampMs).toLocaleDateString();
 }
 
-export function RecentFilesScreen({ files, onSelectFile, onClose }: RecentFilesScreenProps): React.JSX.Element {
+export function RecentFilesScreen({
+  files,
+  onSelectFile,
+  onRemoveFile,
+  onClose,
+}: RecentFilesScreenProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -68,6 +75,7 @@ export function RecentFilesScreen({ files, onSelectFile, onClose }: RecentFilesS
                 </Text>
                 <Text style={styles.rowTime}>{formatRelativeTime(item.openedAt)}</Text>
               </View>
+              <CloseButton onPress={() => onRemoveFile(item.path)} />
             </Pressable>
           )}
         />

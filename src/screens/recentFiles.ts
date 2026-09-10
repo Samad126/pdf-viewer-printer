@@ -87,3 +87,21 @@ export async function recordRecentFile(path: string, name: string): Promise<Rece
   await writeRecentsFile(updated);
   return updated;
 }
+
+/** Removes one entry (by path) from the recents list - just the history entry, never the PDF
+ * itself. Resolves with the updated list. */
+export async function removeRecentFile(path: string): Promise<RecentFile[]> {
+  const existing = await readRecentsFile();
+  const removedEntry = existing.find(file => file.path === path);
+  const updated = existing.filter(file => file.path !== path);
+  await writeRecentsFile(updated);
+
+  if (removedEntry?.thumbnailPath != null) {
+    const thumbnailFsPath = removedEntry.thumbnailPath.startsWith('file://')
+      ? removedEntry.thumbnailPath.slice('file://'.length)
+      : removedEntry.thumbnailPath;
+    ReactNativeBlobUtil.fs.unlink(thumbnailFsPath).catch(() => undefined);
+  }
+
+  return updated;
+}

@@ -1,9 +1,12 @@
 import { pick, isErrorWithCode, errorCodes, types, keepLocalCopy } from '@react-native-documents/picker';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AboutModal } from '../ui/AboutModal';
+import { CloseButton } from '../ui/CloseButton';
 import { RecentFilesScreen } from './RecentFilesScreen';
 import { RecentThumbnail } from './RecentThumbnail';
-import { loadRecentFiles } from './recentFiles';
+import { loadRecentFiles, removeRecentFile } from './recentFiles';
 import type { RecentFile } from './recentFiles';
 
 interface HomeScreenProps {
@@ -15,9 +18,11 @@ const CARD_THUMBNAIL_WIDTH = 64;
 const CARD_THUMBNAIL_HEIGHT = 84;
 
 export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element {
+  const insets = useSafeAreaInsets();
   const [error, setError] = useState<string | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [showAllRecents, setShowAllRecents] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
 
   // HomeScreen fully unmounts/remounts each time the app returns here from the viewer (App.tsx
   // swaps between the two, it doesn't just hide this one), so loading fresh on mount already
@@ -30,6 +35,12 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  const handleRemoveRecent = useCallback((path: string) => {
+    removeRecentFile(path)
+      .then(setRecentFiles)
+      .catch(() => undefined);
   }, []);
 
   const handlePick = useCallback(async () => {
@@ -57,7 +68,12 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
 
   if (showAllRecents) {
     return (
-      <RecentFilesScreen files={recentFiles} onSelectFile={onFilePicked} onClose={() => setShowAllRecents(false)} />
+      <RecentFilesScreen
+        files={recentFiles}
+        onSelectFile={onFilePicked}
+        onRemoveFile={handleRemoveRecent}
+        onClose={() => setShowAllRecents(false)}
+      />
     );
   }
 
@@ -88,11 +104,16 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
           <View style={styles.recentsGrid}>
             {homeRecents.map(file => (
               <Pressable key={file.path} style={styles.recentCard} onPress={() => onFilePicked(file.path, file.name)}>
-                <RecentThumbnail
-                  thumbnailPath={file.thumbnailPath}
-                  width={CARD_THUMBNAIL_WIDTH}
-                  height={CARD_THUMBNAIL_HEIGHT}
-                />
+                <View style={styles.recentThumbnailWrapper}>
+                  <RecentThumbnail
+                    thumbnailPath={file.thumbnailPath}
+                    width={CARD_THUMBNAIL_WIDTH}
+                    height={CARD_THUMBNAIL_HEIGHT}
+                  />
+                  <View style={styles.recentRemoveButton}>
+                    <CloseButton onPress={() => handleRemoveRecent(file.path)} />
+                  </View>
+                </View>
                 <Text style={styles.recentCardName} numberOfLines={1}>
                   {file.name}
                 </Text>
@@ -101,6 +122,16 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
           </View>
         </View>
       )}
+
+      <Pressable
+        style={[styles.aboutButton, { top: insets.top + 16 }]}
+        onPress={() => setShowAbout(true)}
+        hitSlop={8}
+      >
+        <Text style={styles.aboutLabel}>About</Text>
+      </Pressable>
+
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </View>
   );
 }
@@ -165,11 +196,26 @@ const styles = StyleSheet.create({
   },
   recentsGrid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 16,
   },
   recentCard: {
     width: CARD_THUMBNAIL_WIDTH,
     alignItems: 'center',
+  },
+  recentThumbnailWrapper: {
+    width: CARD_THUMBNAIL_WIDTH,
+    height: CARD_THUMBNAIL_HEIGHT,
+  },
+  recentRemoveButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#101418',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   recentCardName: {
     color: '#d0d5dd',
@@ -177,5 +223,14 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: 'center',
     width: '100%',
+  },
+  aboutButton: {
+    position: 'absolute',
+    right: 20,
+  },
+  aboutLabel: {
+    color: '#6b7280',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
