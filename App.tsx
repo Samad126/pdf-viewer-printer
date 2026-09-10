@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { recordRecentFile } from './src/screens/recentFiles';
 import { useSharedPdfIntent } from './src/sharing/useSharedPdfIntent';
 import { ViewerScreen } from './src/viewer/ViewerScreen';
 
@@ -13,8 +14,12 @@ interface SelectedFile {
 function App(): React.JSX.Element {
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
 
-  const handleFilePicked = useCallback((filePath: string, fileName: string) => {
+  // Single entry point for opening a file, used by both HomeScreen's own picker/recents list and
+  // useSharedPdfIntent below, so every way a file can be opened gets recorded exactly once, in the
+  // same place.
+  const openFile = useCallback((filePath: string, fileName: string) => {
     setSelectedFile({ path: filePath, name: fileName });
+    recordRecentFile(filePath, fileName).catch(() => undefined);
   }, []);
 
   const handleBack = useCallback(() => {
@@ -37,9 +42,12 @@ function App(): React.JSX.Element {
   }, [selectedFile, handleBack]);
 
   useSharedPdfIntent(
-    useCallback(file => {
-      setSelectedFile({ path: file.path, name: file.name });
-    }, []),
+    useCallback(
+      file => {
+        openFile(file.path, file.name);
+      },
+      [openFile],
+    ),
   );
 
   return (
@@ -47,7 +55,7 @@ function App(): React.JSX.Element {
       <StatusBar barStyle="light-content" />
       <View style={styles.container}>
         {selectedFile == null ? (
-          <HomeScreen onFilePicked={handleFilePicked} />
+          <HomeScreen onFilePicked={openFile} />
         ) : (
           <ViewerScreen filePath={selectedFile.path} fileName={selectedFile.name} onBack={handleBack} />
         )}
