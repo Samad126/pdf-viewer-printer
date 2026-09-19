@@ -6,7 +6,7 @@ import {
   CONVERT_ENDPOINT,
   MAX_UPLOAD_BYTES,
 } from './backendConfig';
-import { buildConversionCacheKey, convertedPdfPath } from './conversionPaths';
+import { buildConversionCacheKey, convertedPdfDir, convertedPdfPath } from './conversionPaths';
 import { toPdfFileName } from './documentTypes';
 
 export interface ConvertedDocument {
@@ -96,8 +96,39 @@ export async function convertDocxFile(docxUri: string, displayName: string): Pro
     );
   }
 
+  await ensureCacheDirectory(cacheDir);
   await upload(sourcePath, displayName, outputPath);
   return { uri: `file://${outputPath}`, name, cached: false };
+}
+
+/**
+ * Makes sure the directory converted PDFs are cached in exists.
+ *
+ * Nothing else creates it, and the transport does not create parents - it opens the path it was
+ * handed and fails if the way to it is missing. The native module this upload replaced did create
+ * it, as part of writing its own output, and when that module was deleted the step went with it.
+ *
+ * That omission was invisible for a long time because the failure it causes is: the library
+ * swallows the write error and reports the same "Download interrupted." it uses for a dropped
+ * connection, so a missing directory looked exactly like a network problem - while the server, which
+ * had received the upload and converted it perfectly, logged a 200 every time.
+ *
+ * Done before the upload so it costs a millisecond rather than a whole conversion.
+ */
+async function ensureCacheDirectory(cacheDir: string): Promise<void> {
+  const directory = convertedPdfDir(cacheDir);
+  // Blob-util's mkdir is not idempotent: it rejects with EEXIST when the directory is already
+  // there, so this has to ask first or every conversion after the first would fail.
+  if (await ReactNativeBlobUtil.fs.exists(directory)) return;
+
+  try {
+    await ReactNativeBlobUtil.fs.mkdir(directory);
+  } catch {
+    throw new DocxConversionError(
+      'E_CONVERT_CACHE_UNWRITABLE',
+      `Could not prepare somewhere to save the converted document (${directory}).`,
+    );
+  }
 }
 
 /**

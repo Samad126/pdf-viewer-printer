@@ -211,3 +211,41 @@ describe('cancelDocxConversion', () => {
     await expect(cancelDocxConversion()).resolves.toBeUndefined();
   });
 });
+
+describe('the conversion cache directory', () => {
+  // The native module this upload replaced created this directory as part of writing its output.
+  // When that module was deleted nothing did, and every conversion failed while the server logged
+  // a 200 - the transport opens the path it is given and does not create parents, so the write
+  // failed, and the library reports a failed write as "Download interrupted." just as it does a
+  // dropped connection. Nothing here could see that, so it is asserted explicitly.
+  it('creates the directory, before uploading rather than after', async () => {
+    await convertDocxFile(SOURCE_URI, DISPLAY_NAME);
+
+    expect(fs.mkdir).toHaveBeenCalledWith('/mock/cache-dir/docx-converted');
+    expect(fs.mkdir.mock.invocationCallOrder[0]).toBeLessThan(
+      blobUtil.fetch.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not try to create it once it already exists', async () => {
+    // mkdir rejects with EEXIST on an existing directory rather than being idempotent, so calling
+    // it every time would fail every conversion after the first.
+    fs.exists.mockImplementation((path: string) =>
+      Promise.resolve(path.endsWith('docx-converted')),
+    );
+
+    const result = await convertDocxFile(SOURCE_URI, DISPLAY_NAME);
+
+    expect(result.cached).toBe(false);
+    expect(fs.mkdir).not.toHaveBeenCalled();
+  });
+
+  it('refuses before uploading when it cannot be created', async () => {
+    fs.mkdir.mockRejectedValue(new Error('EROFS'));
+
+    await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
+      code: 'E_CONVERT_CACHE_UNWRITABLE',
+    });
+    expect(blobUtil.fetch).not.toHaveBeenCalled();
+  });
+});

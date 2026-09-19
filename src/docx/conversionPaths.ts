@@ -53,6 +53,18 @@ function sanitizeForFileName(baseName: string): string {
 }
 
 /**
+ * The directory converted PDFs are cached in.
+ *
+ * Exported because it has to exist before one can be written, and nothing creates it implicitly.
+ * The native module that used to do this conversion made the directory as part of writing its
+ * output; the upload that replaced it does not, and neither does the transport, which opens the
+ * path it is handed and fails if the way to it is missing.
+ */
+export function convertedPdfDir(cacheDir: string): string {
+  return `${cacheDir}/${CACHE_DIR_NAME}`;
+}
+
+/**
  * The path a conversion of `sourceName` is cached at under `cacheDir`.
  *
  * The converted file is named as the PDF it becomes (`Report.pdf`), because its name on disk is
@@ -68,5 +80,5 @@ export function convertedPdfPath(
   const dot = pdfName.lastIndexOf('.');
   const baseName = dot > 0 ? pdfName.slice(0, dot) : pdfName;
   const extension = dot > 0 ? pdfName.slice(dot) : '';
-  return `${cacheDir}/${CACHE_DIR_NAME}/${cacheKey}-${sanitizeForFileName(baseName)}${extension}`;
+  return `${convertedPdfDir(cacheDir)}/${cacheKey}-${sanitizeForFileName(baseName)}${extension}`;
 }
