@@ -1,13 +1,10 @@
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { resolveLocalPath } from '../files/localPath';
-import {
-  CONNECT_TIMEOUT_MS,
-  CONVERSION_TIMEOUT_MS,
-  CONVERT_ENDPOINT,
-  MAX_UPLOAD_BYTES,
-} from './backendConfig';
+import { CONVERSION_TIMEOUT_MS, CONVERT_ENDPOINT, MAX_UPLOAD_BYTES } from './backendConfig';
 import { buildConversionCacheKey, convertedPdfDir, convertedPdfPath } from './conversionPaths';
 import { toPdfFileName } from './documentTypes';
+import { PdfUpload } from './NativePdfUpload';
+import type { PdfUploadResult } from './NativePdfUpload';
 
 export interface ConvertedDocument {
   /** file:// path to the PDF, ready to hand to the viewer. */
@@ -185,49 +182,37 @@ async function uploadOnce(
     throw new DocxConversionError('E_CONVERT_TIMEOUT', timeoutMessage());
   }
 
-  // The response is written straight to disk rather than returned through JS.
-  //
-  // `timeout` here is the CONNECT timeout only, not a deadline for the whole exchange: the library
-  // forces the read timeout to zero when a response goes to a file, deliberately, so that a large
-  // download is never cut off. The watchdog below is the overall deadline for that reason.
-  const task = ReactNativeBlobUtil.config({
-    path: partPath,
-    timeout: CONNECT_TIMEOUT_MS,
-  }).fetch('POST', CONVERT_ENDPOINT, {}, [
-    {
-      name: 'file',
-      filename: displayName,
-      // Deliberately generic. The converter picks its import filter from the file *name*, which is
-      // the part that has to be right, and the app would only be guessing at anything finer.
-      type: 'application/octet-stream',
-      // Without this prefix the native side treats `data` as base64 and decodes it, rather than
-      // reading the path it plainly looks like. `wrap` is what adds it.
-      data: ReactNativeBlobUtil.wrap(sourcePath),
+  // The document is streamed from disk and the response straight back to disk, both natively, so a
+  // large document is never held in memory on either side.
+  const task = PdfUpload.upload(CONVERT_ENDPOINT, sourcePath, displayName, partPath);
+
+  // Aborting is fire-and-forget in both places it happens: the promise that reports the outcome of
+  // the upload is the one everyone is already waiting on, and it settles either way.
+  activeTask = {
+    cancel: () => {
+      PdfUpload.cancel().catch(() => undefined);
     },
-  ]);
+  };
 
-  activeTask = task;
-
-  // The deadline, enforced here because the HTTP client's own timeout cannot reach a stalled
-  // response body (see below). Cancel is the only way to stop waiting on one.
+  // The deadline. The native side sets no read timeout of its own, deliberately, so that a slow
+  // conversion is never cut off before the server has had its say; aborting the request is the only
+  // way to stop waiting on one that has stopped sending.
   let expired = false;
   const watchdog = setTimeout(() => {
     expired = true;
-    task.cancel();
+    PdfUpload.cancel().catch(() => undefined);
   }, remaining);
 
   try {
-    const response = await task;
-    const status = response.respInfo.status;
+    // Resolves for a rejection by the server too - a 4xx is an answer, not a failure to ask - so
+    // the status decides what happens next rather than the promise settling.
+    const result = await task;
 
-    // A non-2xx resolves rather than rejecting, and its body has already been written to the same
-    // path a success would have used - so the status has to be checked before anything reads that
-    // file as a PDF.
-    if (status < 200 || status >= 300) {
-      throw new DocxConversionError('E_CONVERT_FAILED', await readServerMessage(partPath, status));
+    if (result.status < 200 || result.status >= 300) {
+      throw new DocxConversionError('E_CONVERT_FAILED', readServerMessage(result));
     }
 
-    const contentType = headerValue(response.respInfo.headers, 'content-type');
+    const contentType = result.contentType;
     if (contentType != null && !contentType.toLowerCase().includes('application/pdf')) {
       throw new DocxConversionError(
         'E_CONVERT_NOT_A_PDF',
@@ -242,7 +227,7 @@ async function uploadOnce(
     // The user's own cancellation ends up here too, since aborting the request rejects it. The flag
     // above is what tells the two apart: once the watchdog has fired, a rejection is the abort it
     // asked for rather than a cancellation anyone chose.
-    if (isHttpCancellation(error)) {
+    if (isUploadCancellation(error)) {
       throw new DocxConversionCancelledError();
     }
     if (error instanceof DocxConversionError) {
@@ -281,53 +266,41 @@ function isTransportFailure(error: unknown): boolean {
  * Everything here is best-effort: a proxy or a load balancer can answer with HTML, so the status
  * line is the fallback rather than an empty message.
  */
-async function readServerMessage(partPath: string, status: number): Promise<string> {
-  const body = await ReactNativeBlobUtil.fs.readFile(partPath, 'utf8').catch(() => null);
+function readServerMessage(result: PdfUploadResult): string {
+  const body = result.errorBody;
   if (body != null) {
     try {
       const parsed: unknown = JSON.parse(body);
       const message = (parsed as { error?: { message?: unknown } })?.error?.message;
       if (typeof message === 'string' && message.trim().length > 0) return message;
     } catch {
-      // Not JSON. Fall through to the status line.
+      // Not JSON - a proxy answered, not the server. Fall through to the status line.
     }
   }
-  return `The conversion server refused the document (HTTP ${status}).`;
+  return `The conversion server refused the document (HTTP ${result.status}).`;
 }
 
 /**
- * True for the rejection react-native-blob-util produces when a request is aborted.
+ * True for the rejection the native upload produces when it is aborted.
  *
- * This is the only way to recognise it: the error carries no `code`, and the library throws it
- * synchronously from `cancel()` rather than waiting for the native side to confirm, so there is no
- * status or response to inspect either.
+ * Recognised by code rather than by type, because a promise rejected across the bridge arrives as a
+ * plain Error carrying whatever code the native side rejected it with.
  */
-function isHttpCancellation(error: unknown): boolean {
-  return error instanceof ReactNativeBlobUtil.CanceledFetchError;
+function isUploadCancellation(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'E_UPLOAD_CANCELLED';
 }
 
 /**
  * A failure in transit, described rather than dumped.
  *
- * Deliberately does not claim the server was unreachable, which is only one of the things that
- * land here and was wrong the one time it mattered: the library reports a response whose body ended
- * early - which means the server *was* reached - as "Download interrupted.", and saying otherwise
- * sends the reader off to check a connection that was working. The advice is the same either way,
- * so the sentence says only what is certain.
+ * Deliberately does not claim the server was unreachable, which is only one of the things that can
+ * land here and was wrong the one time it mattered: a response whose body ended early means the
+ * server *was* reached, and saying otherwise sends the reader off to check a connection that was
+ * working. The advice is the same either way, so the sentence says only what is certain.
  */
 function describeTransportFailure(error: unknown): string {
   const detail = error instanceof Error && error.message.length > 0 ? ` (${error.message})` : '';
   return `The conversion did not finish. Check your connection and try again.${detail}`;
-}
-
-/** Header lookup, which has to be case-insensitive because HTTP header names are. */
-function headerValue(
-  headers: Record<string, string> | undefined,
-  wanted: string,
-): string | undefined {
-  if (headers == null) return undefined;
-  const key = Object.keys(headers).find(name => name.toLowerCase() === wanted);
-  return key == null ? undefined : headers[key];
 }
 
 function formatMegabytes(bytes: number): string {

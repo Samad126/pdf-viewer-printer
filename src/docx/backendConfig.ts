@@ -13,13 +13,10 @@ export const CONVERSION_SERVER_URL = 'https://converter.alakbaroff.com';
 export const CONVERT_ENDPOINT = `${CONVERSION_SERVER_URL}/convert`;
 
 /**
- * How much connecting is allowed to take, passed to the HTTP client as its own connect timeout.
- *
- * This is not the whole story and is not used as such: react-native-blob-util forces the *read*
- * timeout to zero for a response written to a file, so this bounds reaching the server and nothing
- * after it. The overall deadline below is enforced separately, by the app, for that reason.
+ * NOTE: there is deliberately no connect timeout here. It lives in the native upload
+ * (`PdfUploadModule.CONNECT_TIMEOUT_MS`), which is what actually opens the connection, and a second
+ * copy on this side would be a number that looks authoritative and is never read.
  */
-export const CONNECT_TIMEOUT_MS = 30_000;
 
 /**
  * The overall deadline for one conversion, enforced by a timer in `convertDocx` that aborts the

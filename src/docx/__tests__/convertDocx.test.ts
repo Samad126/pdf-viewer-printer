@@ -6,6 +6,12 @@ import {
   cancelDocxConversion,
   convertDocxFile,
 } from '../convertDocx';
+import { PdfUpload } from '../NativePdfUpload';
+import type { PdfUploadResult } from '../NativePdfUpload';
+
+jest.mock('../NativePdfUpload', () => ({
+  PdfUpload: { upload: jest.fn(), cancel: jest.fn().mockResolvedValue(undefined) },
+}));
 
 /**
  * The mock's shape, spelled out because the real module's types describe the native surface rather
@@ -13,20 +19,30 @@ import {
  */
 interface BlobUtilMock {
   fs: Record<'exists' | 'stat' | 'mv' | 'unlink' | 'readFile' | 'mkdir', jest.Mock>;
-  fetch: jest.Mock;
-  wrap: jest.Mock;
-  CanceledFetchError: new (message: string) => Error;
 }
 
 const blobUtil = ReactNativeBlobUtil as unknown as BlobUtilMock;
 const { fs } = blobUtil;
+const upload = PdfUpload.upload as jest.Mock;
 
 const SOURCE_URI = 'file:///mock/cache-dir/Report.docx';
 const DISPLAY_NAME = 'Report.docx';
 
-/** A successful response, as react-native-blob-util resolves one written to a file. */
-function pdfResponse(): { respInfo: { status: number; headers: Record<string, string> } } {
-  return { respInfo: { status: 200, headers: { 'Content-Type': 'application/pdf' } } };
+/** A successful conversion, as the native upload reports one. */
+function okResult(): PdfUploadResult {
+  return { status: 200, contentType: 'application/pdf', written: true, errorBody: null };
+}
+
+/** A refusal by the server, which arrives as a result rather than a rejection. */
+function refusal(status: number, errorBody: string | null): PdfUploadResult {
+  return { status, contentType: 'application/json', written: false, errorBody };
+}
+
+/** What the native side rejects with when the request is aborted. */
+function cancellation(): Error {
+  const error = new Error('The upload was cancelled.') as Error & { code: string };
+  error.code = 'E_UPLOAD_CANCELLED';
+  return error;
 }
 
 beforeEach(() => {
@@ -37,8 +53,8 @@ beforeEach(() => {
   fs.exists.mockResolvedValue(false);
   fs.mv.mockResolvedValue(undefined);
   fs.unlink.mockResolvedValue(undefined);
-  fs.readFile.mockResolvedValue('');
-  blobUtil.fetch.mockResolvedValue(pdfResponse());
+  fs.mkdir.mockResolvedValue(undefined);
+  upload.mockResolvedValue(okResult());
 });
 
 describe('convertDocxFile', () => {
@@ -50,7 +66,7 @@ describe('convertDocxFile', () => {
     expect(result.cached).toBe(true);
     expect(result.name).toBe('Report.pdf');
     expect(result.uri).toMatch(/^file:\/\/.*-Report\.pdf$/);
-    expect(blobUtil.fetch).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
   });
 
   it('uploads, moves the result into place, and reports the PDF name', async () => {
@@ -60,19 +76,17 @@ describe('convertDocxFile', () => {
     expect(result.name).toBe('Report.pdf');
     expect(result.uri).toMatch(/^file:\/\/.*-Report\.pdf$/);
 
-    expect(blobUtil.fetch).toHaveBeenCalledTimes(1);
-    const [method, url, , body] = blobUtil.fetch.mock.calls[0];
-    expect(method).toBe('POST');
+    expect(upload).toHaveBeenCalledTimes(1);
+    const [url, source, filename, destination] = upload.mock.calls[0];
     expect(url).toBe(CONVERT_ENDPOINT);
-    expect(body[0].name).toBe('file');
-    expect(body[0].filename).toBe(DISPLAY_NAME);
-    // The prefix is load-bearing: without it the native side base64-decodes the path instead of
-    // reading the file it names.
-    expect(body[0].data).toBe(`ReactNativeBlobUtil-file:///mock/cache-dir/Report.docx`);
+    expect(source).toBe('/mock/cache-dir/Report.docx');
+    // The filename is the document's own: the server picks its import filter from it.
+    expect(filename).toBe(DISPLAY_NAME);
 
     // Written to a .part file first, then moved, so a partial download is never visible as a PDF.
     const [from, to] = fs.mv.mock.calls[0];
     expect(from).toBe(`${to}.part`);
+    expect(destination).toBe(from);
   });
 
   it('refuses an oversized document before uploading it', async () => {
@@ -81,7 +95,7 @@ describe('convertDocxFile', () => {
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_TOO_LARGE',
     });
-    expect(blobUtil.fetch).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
   });
 
   it('reports a source it cannot read rather than uploading nothing', async () => {
@@ -90,15 +104,14 @@ describe('convertDocxFile', () => {
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_SOURCE_MISSING',
     });
-    expect(blobUtil.fetch).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
   });
 });
 
 describe('convertDocxFile failures', () => {
   it("surfaces the server's own message and cleans up the part file", async () => {
-    blobUtil.fetch.mockResolvedValue({ respInfo: { status: 422, headers: {} } });
-    fs.readFile.mockResolvedValue(
-      JSON.stringify({ error: { code: 'E_ENCRYPTED', message: 'This document is password protected.' } }),
+    upload.mockResolvedValue(
+      refusal(422, JSON.stringify({ error: { code: 'E_ENCRYPTED', message: 'This document is password protected.' } })),
     );
 
     const error = await convertDocxFile(SOURCE_URI, DISPLAY_NAME).catch(caught => caught);
@@ -111,16 +124,20 @@ describe('convertDocxFile failures', () => {
   });
 
   it('falls back to the status line when the error body is not JSON', async () => {
-    blobUtil.fetch.mockResolvedValue({ respInfo: { status: 502, headers: {} } });
-    fs.readFile.mockResolvedValue('<html>Bad Gateway</html>');
+    // A proxy in front of the server answers with HTML rather than the error envelope.
+    upload.mockResolvedValue(refusal(502, '<html>Bad Gateway</html>'));
 
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toThrow(/502/);
   });
 
+  it('falls back to the status line when there is no body at all', async () => {
+    upload.mockResolvedValue(refusal(504, null));
+
+    await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toThrow(/504/);
+  });
+
   it('rejects a 200 that is not a PDF', async () => {
-    blobUtil.fetch.mockResolvedValue({
-      respInfo: { status: 200, headers: { 'Content-Type': 'text/html' } },
-    });
+    upload.mockResolvedValue({ ...okResult(), contentType: 'text/html' });
 
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_NOT_A_PDF',
@@ -129,7 +146,7 @@ describe('convertDocxFile failures', () => {
   });
 
   it('reports a request that never reached the server', async () => {
-    blobUtil.fetch.mockRejectedValue(new Error('Network request failed'));
+    upload.mockRejectedValue(new Error('Unable to resolve host'));
 
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_UNREACHABLE',
@@ -138,73 +155,74 @@ describe('convertDocxFile failures', () => {
 });
 
 describe('convertDocxFile retries', () => {
-  // The library reports a response whose body ends before its Content-Length as "Download
-  // interrupted." on Android, intermittently, and it is indistinguishable from a dropped
-  // connection. A conversion is idempotent, so this is worth another attempt.
+  // A dropped connection is worth another attempt: a conversion is idempotent and the .part file is
+  // rewritten from scratch, so a second try cannot corrupt anything.
   it('retries once when the first attempt fails in transport, and succeeds', async () => {
-    blobUtil.fetch
-      .mockRejectedValueOnce(new Error('Download interrupted.'))
-      .mockResolvedValueOnce(pdfResponse());
+    upload.mockRejectedValueOnce(new Error('Connection reset')).mockResolvedValueOnce(okResult());
 
     const result = await convertDocxFile(SOURCE_URI, DISPLAY_NAME);
 
     expect(result.cached).toBe(false);
-    expect(blobUtil.fetch).toHaveBeenCalledTimes(2);
+    expect(upload).toHaveBeenCalledTimes(2);
     expect(fs.mv).toHaveBeenCalledTimes(1);
     // The abandoned attempt's part file must not be left behind or written over.
     expect(fs.unlink).toHaveBeenCalledWith(expect.stringContaining('.part'));
   });
 
   it('gives up after the second transport failure rather than looping', async () => {
-    blobUtil.fetch.mockRejectedValue(new Error('Download interrupted.'));
+    upload.mockRejectedValue(new Error('Connection reset'));
 
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_UNREACHABLE',
     });
-    expect(blobUtil.fetch).toHaveBeenCalledTimes(2);
+    expect(upload).toHaveBeenCalledTimes(2);
     expect(fs.mv).not.toHaveBeenCalled();
   });
 
   it('does not retry a refusal from the server, which would fail identically', async () => {
-    blobUtil.fetch.mockResolvedValue({ respInfo: { status: 422, headers: {} } });
-    fs.readFile.mockResolvedValue(
-      JSON.stringify({ error: { message: 'This document is password protected.' } }),
-    );
+    upload.mockResolvedValue(refusal(422, JSON.stringify({ error: { message: 'Password protected.' } })));
 
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_FAILED',
     });
-    expect(blobUtil.fetch).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry a 200 that is not a PDF', async () => {
-    blobUtil.fetch.mockResolvedValue({
-      respInfo: { status: 200, headers: { 'Content-Type': 'text/html' } },
-    });
+    upload.mockResolvedValue({ ...okResult(), contentType: 'text/html' });
 
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_NOT_A_PDF',
     });
-    expect(blobUtil.fetch).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a cancellation the user asked for', async () => {
+    upload.mockRejectedValue(cancellation());
+
+    await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toBeInstanceOf(
+      DocxConversionCancelledError,
+    );
+    expect(upload).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('cancelDocxConversion', () => {
-  it('rejects an in-flight conversion as cancelled, not as a failure', async () => {
-    // A request that stays open until something rejects it, which is what the real one does.
-    let abort: (error: Error) => void = () => undefined;
-    const task = new Promise((_resolve, reject) => {
-      abort = reject;
-    }) as Promise<never> & { cancel: () => void };
-    task.cancel = () => abort(new blobUtil.CanceledFetchError('canceled'));
-    blobUtil.fetch.mockReturnValue(task);
+  it('aborts the request in flight and reports it as cancelled, not as a failure', async () => {
+    let release: (value: never) => void = () => undefined;
+    const pending = new Promise<never>((_resolve, reject) => {
+      release = reject;
+    });
+    upload.mockReturnValue(pending);
 
     const conversion = convertDocxFile(SOURCE_URI, DISPLAY_NAME);
     // Let the preflight awaits settle so the request is actually in flight before cancelling.
     await new Promise(resolve => setTimeout(() => resolve(undefined), 0));
     await cancelDocxConversion();
+    release(cancellation() as never);
 
     await expect(conversion).rejects.toBeInstanceOf(DocxConversionCancelledError);
+    expect(PdfUpload.cancel).toHaveBeenCalled();
   });
 
   it('is safe to call when nothing is running', async () => {
@@ -213,17 +231,14 @@ describe('cancelDocxConversion', () => {
 });
 
 describe('the conversion cache directory', () => {
-  // The native module this upload replaced created this directory as part of writing its output.
-  // When that module was deleted nothing did, and every conversion failed while the server logged
-  // a 200 - the transport opens the path it is given and does not create parents, so the write
-  // failed, and the library reports a failed write as "Download interrupted." just as it does a
-  // dropped connection. Nothing here could see that, so it is asserted explicitly.
+  // Nothing else creates it, and the native upload writes the response into it. A missing directory
+  // would fail the write, and the way that failure surfaces is not obviously about a directory.
   it('creates the directory, before uploading rather than after', async () => {
     await convertDocxFile(SOURCE_URI, DISPLAY_NAME);
 
     expect(fs.mkdir).toHaveBeenCalledWith('/mock/cache-dir/docx-converted');
     expect(fs.mkdir.mock.invocationCallOrder[0]).toBeLessThan(
-      blobUtil.fetch.mock.invocationCallOrder[0],
+      upload.mock.invocationCallOrder[0],
     );
   });
 
@@ -246,6 +261,6 @@ describe('the conversion cache directory', () => {
     await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
       code: 'E_CONVERT_CACHE_UNWRITABLE',
     });
-    expect(blobUtil.fetch).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
   });
 });
