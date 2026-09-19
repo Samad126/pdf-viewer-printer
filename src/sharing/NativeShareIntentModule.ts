@@ -1,12 +1,12 @@
 import { NativeModules } from 'react-native';
 
-export interface SharedPdfFile {
+export interface SharedDocumentFile {
   uri: string;
   name: string;
 }
 
 interface ShareIntentModuleInterface {
-  getSharedPdfFile(): Promise<SharedPdfFile | null>;
+  getSharedDocumentFile(): Promise<SharedDocumentFile | null>;
 }
 
 const ShareIntentModule = NativeModules.ShareIntentModule as ShareIntentModuleInterface | undefined;
@@ -20,6 +20,6 @@ function requireModule(): ShareIntentModuleInterface {
   return ShareIntentModule;
 }
 
-export function getSharedPdfFile(): Promise<SharedPdfFile | null> {
-  return requireModule().getSharedPdfFile();
+export function getSharedDocumentFile(): Promise<SharedDocumentFile | null> {
+  return requireModule().getSharedDocumentFile();
 }

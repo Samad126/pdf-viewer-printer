@@ -1,0 +1,10 @@
+# Vendored third-party JavaScript, shipped into the APK as-is and served to the offscreen WebView
+# that DocxModule uses to render a Word document. These are minified release builds from npm (see
+# the NOTICE file next to them), not source this project owns or maintains, so linting them reports
+# thousands of style complaints about code nobody here edits - and a single `eslint --fix` would
+# rewrite them out of the form their upstream ships.
+android/app/src/main/assets/docx/
+
+# Build output.
+android/app/build/
+android/build/

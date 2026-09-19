@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>docx</title>
+
+<!--
+  Replaced by DocxAssetWebViewClient as this file is served, with the page box it read out of the
+  document's own w:pgSz. It has to be in the head at load time rather than injected by script
+  afterwards, because the viewport meta decides the width the document is laid out at.
+-->
+<!--DOCX_PAGE_GEOMETRY-->
+
+<!--
+  Everything in this stylesheet is !important on purpose, not stylistically.
+
+  docx-preview appends its own generated stylesheets into #docx-styles, which lives inside
+  <body> - later in document order than this <head>. For any property docx-preview also sets,
+  it therefore wins the tie against a same-specificity rule written here, so the only way to
+  override it from <head> is with !important.
+
+  There are no print rules here at all, and that is the point: this page is never printed. It is
+  rendered once and then rasterized a page at a time by DocxPageCapture, so fragmentation
+  properties like break-before and orphans would describe a paging pass that never happens. The
+  page breaks are made real by the pagination pass in the script below instead.
+-->
+<style id="page-overrides">
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  section.docx {
+    /* docx-preview makes each page section a flex container. Block layout is what fragments across
+       columns, and a flex container does not fragment the way the document's own flow does. */
+    display: block !important;
+    /* Set by docx-preview; kept as cheap insurance in case content ever exceeds its box. */
+    overflow: visible !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    background: #fff !important;
+    /* Every explicit page break in the source becomes a section, and a section has to start a new
+       column - which is a page. Without this an author's page breaks would simply be ignored: the
+       break itself is not content, so once docx-preview has split the document there is nothing
+       left in the DOM that says where it was. */
+    break-before: column !important;
+  }
+
+  /* The first section opens the document. Breaking before it would emit a blank leading page. */
+  section.docx:first-of-type {
+    break-before: auto !important;
+  }
+
+  /* An image split across two pages reads as a printing fault; pushing it to the next page reads
+     as pagination. Same reasoning docx-preview would apply if it were printing. */
+  #docx-body img {
+    break-inside: avoid !important;
+  }
+</style>
+</head>
+<body>
+<!-- Rendered <style> nodes land in #docx-styles; everything else lands in #docx-body. -->
+<div id="docx-styles"></div>
+<div id="docx-body"></div>
+
+<!--
+  Load order is mandatory: docx-preview's UMD wrapper captures globalThis.JSZip at the moment
+  the script is evaluated, so JSZip must already exist. Getting this backwards produces a
+  confusing failure much later, inside the render, rather than at load.
+-->
+<script src="jszip.min.js"></script>
+<script src="docx-preview.min.js"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  // Injected by DocxModule.addJavascriptInterface. Only these three methods exist, and none of
+  // them can do anything except report a stage name or a message back to native - the page
+  // renders untrusted document content, so the bridge is deliberately capability-free. In
+  // particular the output path never crosses this boundary.
+  var bridge = window.DocxBridge;
+
+  // Also injected by DocxAssetWebViewClient, as the same page box the viewport meta above was
+  // built from. The fallback is A4 at 96 CSS pixels per inch, which is what the page would be
+  // laid out at anyway if the substitution were ever missed, so a missing injection degrades to
+  // the default rather than to nonsense.
+  var PAGE = window.__DOCX_PAGE__ || { w: 794, h: 1123 };
+
+  // Single-shot: the first terminal signal (ready or error) is the only one native acts on.
+  var signaled = false;
+  var stage = 'boot';
+
+  function progress(next) {
+    stage = next;
+    try { bridge.onProgress(next); } catch (e) { /* bridge absent: diagnostics only */ }
+  }
+
+  function fail(message) {
+    if (signaled) return;
+    signaled = true;
+    try { bridge.onError(String(message).slice(0, 400)); } catch (e) { /* nothing left to do */ }
+  }
+
+  function ready(meta) {
+    if (signaled) return;
+    signaled = true;
+    try { bridge.onReady(JSON.stringify(meta).slice(0, 2000)); } catch (e) { /* as above */ }
+  }
+
+  // Two frames: lets layout and paint settle before native starts capturing.
+  function nextFrame() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () { requestAnimationFrame(resolve); });
+    });
+  }
+
+  function withTimeout(promise, ms) {
+    return Promise.race([promise, new Promise(function (resolve) { setTimeout(resolve, ms); })]);
+  }
+
+  var OPTIONS = {
+    // No .docx-wrapper element at all, which removes the grey page background, the 30px padding
+    // and the 30px margin-bottom between sections. Overriding those from <head> would also work,
+    // but not creating them has no failure mode.
+    inWrapper: false,
+    // Width and height then come from the layout viewport rather than from the document's own
+    // sectPr. The viewport is sized to the same page box that declared, so ignoring them here
+    // reflows the document into the width it was written for rather than into a second opinion
+    // about it - and ignoreHeight in particular stops the section's min-height from adding a
+    // fraction of a page to every section, which is what makes the page count come out right.
+    ignoreWidth: true,
+    ignoreHeight: true,
+    // Explicit page breaks split the document into sections, and a section starts a new column
+    // because of it - a new page. Turning this off would silently delete them.
+    breakPages: true,
+    ignoreLastRenderedPageBreak: true,
+    renderHeaders: true,
+    renderFooters: true,
+    renderFootnotes: true,
+    renderEndnotes: true,
+    renderChanges: false,
+    renderComments: false,
+    // altChunk content is inserted as a same-origin <iframe srcdoc> built from HTML supplied by
+    // the document itself. Not worth the attack surface for a feature that is rare in practice.
+    renderAltChunks: false,
+    // Images become data: URLs. The capture runs against the rendered page rather than through a
+    // separate print pass, but a blob: URL would still have to be resolvable when the page is
+    // painted, and base64 removes that whole class of "image missing on page 7".
+    useBase64URL: true,
+    ignoreFonts: false,
+    debug: false
+  };
+
+  /**
+   * Counts the pages the document was laid out into.
+   *
+   * The document is not cut into pages by measuring it; it is laid out as pages. The stylesheet the
+   * page is served with makes #docx-body a multi-column container exactly one page wide and one
+   * page tall, with no gap and column-fill: auto, so the browser fills a column to the page height
+   * and only then starts the next one. Multi-column is the only fragmentainer CSS has, and having
+   * one is the difference between a page break that lands between two lines and one that lands
+   * through the middle of a line - a continuous flow has nowhere to put a break, because nothing
+   * in it knows where a page ends.
+   *
+   * The count therefore comes from where the content actually stopped. A zero-height marker is
+   * appended after it and its position read back: a marker at x is in column round(x / pageWidth),
+   * so the document occupies that many columns plus one. Counting this way rather than dividing the
+   * flow's height by the page height is what makes explicit page breaks come out right, since a
+   * break landing mid-column pushes everything after it into the next one and the division would
+   * not know.
+   *
+   * Returns the page count.
+   */
+  function countPages(pageWidth) {
+    var body = document.getElementById('docx-body');
+    if (!document.querySelector('section.docx')) return 0;
+
+    var marker = document.createElement('div');
+    marker.style.height = '0px';
+    body.appendChild(marker);
+    var rect = marker.getBoundingClientRect();
+    marker.remove();
+
+    var columns = Math.round(rect.left / pageWidth) + 1;
+
+    // Content that ends exactly on a column boundary leaves the marker at the top of a column with
+    // nothing in it, which is not a page. The margin is for sub-pixel rounding, not for content.
+    if (columns > 1 && rect.top < 1) columns -= 1;
+
+    return columns;
+  }
+
+  async function main() {
+    // Asserted immediately, because a missing JSZip global makes docx-preview load apparently
+    // fine and then fail deeper in with an error that gives no hint at the real cause.
+    if (!window.JSZip) return fail('E_VIEWER_NO_JSZIP');
+    if (!window.docx) return fail('E_VIEWER_NO_DOCX_PREVIEW');
+
+    progress('fetch');
+    var response = await fetch('/document.docx', { cache: 'no-store' });
+    if (!response.ok) return fail('E_DOCX_FETCH_' + response.status);
+    var blob = await response.blob();
+    if (!blob.size) return fail('E_DOCX_EMPTY');
+
+    progress('render');
+    await docx.renderAsync(
+      blob,
+      document.getElementById('docx-body'),
+      document.getElementById('docx-styles'),
+      OPTIONS
+    );
+
+    progress('fonts');
+    if (document.fonts && document.fonts.ready) {
+      await withTimeout(document.fonts.ready, 3000);
+    }
+
+    progress('images');
+    var images = Array.prototype.slice.call(document.images);
+    await withTimeout(Promise.allSettled(images.map(function (img) {
+      return img.decode ? img.decode().catch(function () {}) : Promise.resolve();
+    })), 5000);
+
+    progress('paginate');
+    var pageCount = countPages(PAGE.w);
+    await nextFrame();
+
+    ready({
+      pageCount: pageCount,
+      // Checked by native against the width it injected, because a viewport meta that did not take
+      // effect leaves every page cropped to the screen's idea of a page while still being a
+      // document of the right page count. It is the one measurement that has to be confirmed from
+      // in here: the renderer's scale is not reported, deliberately - devicePixelRatio is the
+      // display density, not the page scale, and the scale needs no check anyway. The view is
+      // sized to the page box, so the scale the injected meta asks for and the scale Chromium
+      // falls back to when fitting the layout viewport to the view are the same number.
+      viewportWidth: document.documentElement.clientWidth,
+      sections: document.querySelectorAll('section.docx').length,
+      images: images.length,
+      // Non-zero means an image Chromium could not decode - EMF/WMF (Word equations, some
+      // charts) are the usual suspects. Not fatal; the rest of the page still renders.
+      imageErrors: images.filter(function (img) { return img.naturalWidth === 0; }).length
+    });
+  }
+
+  main().catch(function (error) {
+    fail((error && (error.message || error)) || 'E_DOCX_RENDER_FAILED');
+  });
+})();
+</script>
+</body>
+</html>

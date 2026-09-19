@@ -1,9 +1,10 @@
 # PDF Press
 
-An Android PDF viewer and printer app built with React Native. It reads and prints PDFs entirely
-through [PDFium](https://pdfium.googlesource.com/pdfium/), never through Android's built-in
-`PdfRenderer`, because `PdfRenderer` silently drops content on PDFs with CID-keyed / Type1C
-embedded fonts.
+An Android document viewer and printer app built with React Native. It reads and prints PDFs
+entirely through [PDFium](https://pdfium.googlesource.com/pdfium/), never through Android's
+built-in `PdfRenderer`, because `PdfRenderer` silently drops content on PDFs with CID-keyed /
+Type1C embedded fonts. It also opens Word (`.docx`) documents, converting them to PDF on the
+device first.
 
 ## Why PDFium instead of `PdfRenderer`
 
@@ -21,8 +22,35 @@ print pipeline is: **rasterize each page with PDFium → composite anything that
 `android.graphics.pdf.PdfDocument`.** This same rasterize/rebuild pipeline backs both printing and
 the "Draw / Annotate" feature.
 
+## How Word documents are converted (and what that costs)
+
+A `.docx` is rendered in a headless `WebView` by [docx-preview](https://github.com/VolodymyrBaydalka/docxjs),
+then rasterized page by page and reassembled into a PDF with `PdfDocument` — the same
+rasterize/rebuild idea as the PDF pipeline above, and for the same reason: it produces a real PDF
+that every other feature in the app (viewer, both print paths, draw/annotate, export, share) then
+handles exactly as it handles any other PDF.
+
+**The consequence is that a converted Word document has no selectable or searchable text.**
+That is a genuine regression against the reasoning in the section above, and it is forced rather
+than chosen. The WebView's own `PrintDocumentAdapter` would preserve real text, but it cannot be
+driven from application code: it takes its callbacks as
+`PrintDocumentAdapter.LayoutResultCallback` and `WriteResultCallback`, both of which have
+package-private constructors, so the only code that can call `onLayout` or `onWrite` is the print
+framework itself. Using it would mean handing the document to the system print sheet and asking the
+user to pick "Save as PDF" — not a conversion the app can perform on its own.
+
+The page box comes from the document's own `w:sectPr/w:pgSz` (parsed by
+`DocxPageGeometry.fromDocumentXml`), and the viewer page pads and breaks the rendered flow so that
+scrolling by exactly one page height lands on the page boundaries the document itself asks for.
+Conversion output is cached in the cache directory, keyed on the source path, size and modification
+time, so reopening an unchanged document is instant and editing one re-renders it.
+
 ## Features
 
+- **Open Word (`.docx`) documents**, converted to PDF on the device and then viewed, printed,
+  drawn on, exported and shared like any other PDF. Only `.docx` — legacy `.doc` files are a
+  different binary format and are rejected with a clear message rather than mis-rendered. See
+  [what that conversion costs](#how-word-documents-are-converted-and-what-that-costs).
 - **View** any PDF via [`react-native-pdf`](https://github.com/wonday/react-native-pdf), with
   night mode (colour inversion), table of contents (from the PDF outline), and in-document find
   (PDFium full-text search).
@@ -36,10 +64,10 @@ the "Draw / Annotate" feature.
     same print options as above, and both local and remote (`Cancel-Job`) job cancellation.
 - **Draw / Annotate** — freehand drawing over any page, with whole-document pinch-to-zoom,
   undo/clear, and a save-as flow.
-- **Share** any open PDF via the system share sheet, and receive PDFs shared into the app from
-  other apps ("Open with" / "Share").
+- **Share** any open PDF via the system share sheet, and receive PDFs and `.docx` files shared into
+  the app from other apps ("Open with" / "Share").
 - **Export** a PDF as a zip of per-page PNGs, or as extracted plain text.
-- Registered as a PDF viewer for Android's file-open and share intents.
+- Registered for Android's file-open and share intents, for both PDF and `.docx`.
 
 ## Requirements
 
@@ -74,10 +102,18 @@ cd android
 - `android/app/src/main/java/com/pdfprinter/annotate/` — server-side rasterize + composite +
   rebuild for the drawing feature.
 - `android/app/src/main/java/com/pdfprinter/sharing/` — send/receive sides of PDF sharing.
+- `android/app/src/main/java/com/pdfprinter/docx/` — the `.docx` → PDF conversion: reading the page
+  box out of the package, serving the viewer page and the document under a synthetic origin, and
+  rasterizing the rendered pages into a PDF.
+- `android/app/src/main/assets/docx/` — the bundled viewer page and its two vendored libraries
+  (docx-preview, JSZip). Both are bundled rather than fetched, so conversion works offline.
 - `src/viewer/` — the main viewer screen and its overlays (menus, find, print flow).
 - `src/annotate/` — the drawing/annotation screen.
 - `src/printers/` — JS side of the direct IPP print pipeline and printer picker UI.
 - `src/pdf-tools/` — find, export, and share features.
+- `src/docx/` — JS side of the conversion: document types, the conversion cache, the progress
+  modal, and the hook that drives them.
+- `src/files/` — turning content URIs from the picker and from share intents into local paths.
 
 ## Scripts
 

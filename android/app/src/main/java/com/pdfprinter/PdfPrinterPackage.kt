@@ -5,6 +5,7 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.pdfprinter.annotate.AnnotationModule
+import com.pdfprinter.docx.DocxModule
 import com.pdfprinter.pdf.PdfRebuildModule
 import com.pdfprinter.pdf.PdfTextModule
 import com.pdfprinter.pdf.PdfiumModule
@@ -29,6 +30,7 @@ class PdfPrinterPackage : ReactPackage {
             ZipModule(reactContext),
             FileShareModule(reactContext),
             AnnotationModule(reactContext),
+            DocxModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()

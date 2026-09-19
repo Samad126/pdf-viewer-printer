@@ -1,0 +1,29 @@
+Third-party JavaScript bundled into this directory
+==================================================
+
+These files are vendored copies of npm packages, served to the offscreen WebView
+that DocxModule.kt uses to render a .docx for printing. They are not fetched at
+runtime and there is no network access from that WebView.
+
+jszip.min.js
+    JSZip 3.10.2 - https://github.com/Stuk/jszip
+    Dual licensed under the MIT license or GPLv3.
+    Retrieved from the npm package `jszip@3.10.2` (dist/jszip.min.js).
+    docx-preview reads the OOXML package through it, and this viewer page uses
+    it to read word/document.xml when detecting page orientation.
+
+docx-preview.min.js
+    docx-preview 0.4.0 - https://github.com/VolodymyrBaydalka/docxjs
+    Released under the Apache License 2.0.
+    Retrieved from the npm package `docx-preview@0.4.0` (dist/docx-preview.min.js),
+    with the trailing `//# sourceMappingURL=` comment removed so the WebView does
+    not request a .map file that is not shipped in the APK.
+
+To update either one: `npm pack <package>@<version>`, take the file named above
+from `dist/`, re-strip the sourceMappingURL comment if present, and bump the
+version named here. There are no build-time steps and no package.json entry -
+these are static assets under `android/app/src/main/assets/`, so they are picked
+up by the Android build with no gradle change.
+
+Note that docx-preview renders untrusted document content, so the WebView hosting
+it is treated as hostile - see the comment on DocxAssetWebViewClient.kt.
