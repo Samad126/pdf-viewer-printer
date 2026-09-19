@@ -2,7 +2,7 @@ import { pick, isErrorWithCode, errorCodes, types, keepLocalCopy } from '@react-
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { DOCX_MIME_TYPE } from '../docx';
+import { fallbackNameForMimeType } from '../docx';
 import { AboutModal } from '../ui/AboutModal';
 import { RecentFilesScreen } from './RecentFilesScreen';
 import { RecentThumbnail } from './RecentThumbnail';
@@ -46,11 +46,10 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
   const handlePick = useCallback(async () => {
     setError(null);
     try {
-      const [picked] = await pick({ type: [types.pdf, types.docx] });
+      const [picked] = await pick({ type: [types.pdf, types.docx, types.doc] });
       // Only used when the provider reports no display name at all, where the extension decides
       // which of the app's two opening paths this file takes.
-      const fallbackName = picked.type === DOCX_MIME_TYPE ? 'document.docx' : 'document.pdf';
-      const name = picked.name ?? fallbackName;
+      const name = picked.name ?? fallbackNameForMimeType(picked.type);
 
       const [copy] = await keepLocalCopy({
         files: [{ uri: picked.uri, fileName: name }],
@@ -89,7 +88,8 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
       <Text style={styles.title}>PDF Printer</Text>
       <Text style={styles.subtitle}>
         Pick a PDF to view it, or print it through a PDFium-rasterized, font-free copy. Word
-        documents can be opened too - they are converted to PDF on the device first.
+        documents can be opened too. They need a connection - they are converted by an online
+        service, which is the only thing here that leaves the device.
       </Text>
 
       <Pressable style={styles.pickButton} onPress={handlePick}>

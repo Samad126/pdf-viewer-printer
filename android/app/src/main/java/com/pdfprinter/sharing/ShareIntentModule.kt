@@ -14,14 +14,14 @@ import com.pdfprinter.pdf.PdfWorkExecutors
 private const val PDF_MIME_TYPE = "application/pdf"
 private const val DOCX_MIME_TYPE =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+private const val DOC_MIME_TYPE = "application/msword"
 
 /**
- * The document types this app can open. A .docx is converted to PDF once it is in, but that
- * happens after this module has already decided whether to surface the intent at all.
+ * The document types this app can open. A Word document is converted to PDF once it is in, but that
+ * happens after this module has already decided whether to surface the intent at all - which is why
+ * this has to list every format rather than deferring to the conversion path.
  */
-private val SUPPORTED_MIME_TYPES = setOf(PDF_MIME_TYPE, DOCX_MIME_TYPE)
-
-private const val DEFAULT_SHARED_FILE_NAME = "Shared document.pdf"
+private val SUPPORTED_MIME_TYPES = setOf(PDF_MIME_TYPE, DOCX_MIME_TYPE, DOC_MIME_TYPE)
 
 /**
  * Surfaces a document the app was opened or shared with from another app (file manager "Open
@@ -106,11 +106,18 @@ class ShareIntentModule(private val reactContext: ReactApplicationContext) :
         return if (lastSegment.contains('.')) lastSegment else "$lastSegment${extensionFor(mimeType)}"
     }
 
-    private fun defaultNameFor(mimeType: String?): String =
-        if (mimeType == DOCX_MIME_TYPE) "Shared document.docx" else DEFAULT_SHARED_FILE_NAME
+    private fun defaultNameFor(mimeType: String?): String = "Shared document${extensionFor(mimeType)}"
 
-    private fun extensionFor(mimeType: String?): String =
-        if (mimeType == DOCX_MIME_TYPE) ".docx" else ".pdf"
+    /**
+     * The one place that maps an intent's MIME type onto an extension, so the fallback name above
+     * cannot drift out of step with it. Getting this wrong is not cosmetic: an unrecognised Word
+     * document lands on `.pdf` and is then handed to the PDF viewer, which fails on it.
+     */
+    private fun extensionFor(mimeType: String?): String = when (mimeType) {
+        DOCX_MIME_TYPE -> ".docx"
+        DOC_MIME_TYPE -> ".doc"
+        else -> ".pdf"
+    }
 
     companion object {
         const val NAME = "ShareIntentModule"

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { DocxConversionModal, isDocxFileName, useDocxConversion } from './src/docx';
+import { DocxConversionModal, isWordFileName, useDocxConversion } from './src/docx';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { recordRecentFile } from './src/screens/recentFiles';
 import { useSharedDocumentIntent } from './src/sharing/useSharedDocumentIntent';
@@ -27,10 +27,12 @@ function App(): React.JSX.Element {
   //
   // A Word document is converted to PDF here, before anything else sees it, so that no other part
   // of the app has to know Word documents exist: the viewer, both print paths, draw/annotate,
-  // export and share all keep taking a plain PDF path and are unchanged.
+  // export and share all keep taking a plain PDF path and are unchanged. That conversion goes to a
+  // server, so unlike every other path through this function it can fail on the network - the
+  // conversion's own modal is what reports that, and a null result means the user was already told.
   const openFile = useCallback(
     async (filePath: string, fileName: string) => {
-      if (!isDocxFileName(fileName) && !isDocxFileName(filePath)) {
+      if (!isWordFileName(fileName) && !isWordFileName(filePath)) {
         setSelectedFile({ path: filePath, name: fileName });
         recordRecentFile(filePath, fileName).catch(() => undefined);
         return;

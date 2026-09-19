@@ -46,13 +46,14 @@ export function DocxConversionModal({
             <>
               <View style={styles.progressRow}>
                 <ActivityIndicator size="small" style={styles.spinner} />
-                <Text style={styles.progressText}>Rendering…</Text>
+                <Text style={styles.progressText}>Converting…</Text>
               </View>
-              {/* Named so the wait is legible for what it is: the document is being laid out and
-                  re-encoded, and the result opens as a normal PDF with every other feature. */}
+              {/* Says where the document is going, because this is the one action in the app that
+                  sends anything off the device - the rest of it reads, prints and draws entirely
+                  locally. Someone opening a contract should not have to guess. */}
               <Text style={styles.hint}>
-                Converting to PDF. The converted document can be printed, drawn on and exported like
-                any other PDF.
+                Uploaded to a conversion server and returned as a PDF. This needs a connection; the
+                result opens, prints and draws like any other PDF.
               </Text>
               <Pressable onPress={onCancel} hitSlop={8} style={styles.cancelButton}>
                 <Text style={styles.cancelLabel}>Cancel</Text>

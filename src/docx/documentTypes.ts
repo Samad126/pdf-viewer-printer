@@ -1,38 +1,62 @@
 /**
- * What counts as a document this app can open, and how a Word document's name maps onto the PDF
- * it gets converted into.
+ * What counts as a document this app can open, and how a Word document's name maps onto the PDF it
+ * gets converted into.
  *
  * Everything here is by file name rather than MIME type, because a name is the only thing that
  * survives the whole trip: a picked file arrives with a name, a `file://` or `content://` URI whose
  * last segment may be anything at all, and - in the recents list - nothing but the two strings the
- * app itself wrote down. The MIME type is only available at the picker, and only used there.
+ * app itself wrote down. The MIME type is only available at the picker and at an incoming intent,
+ * so the predicates that take one are for those two places and nothing else.
  */
 
 export const DOCX_MIME_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+/** The pre-2007 binary Word format, a CFB/OLE2 container rather than a zip. */
+export const DOC_MIME_TYPE = 'application/msword';
+
 /**
- * Extensions docx-preview can read. `.docm` is the macro-enabled variant of the same OOXML
- * package, and reads identically once opened - the macros are a separate part it never touches.
+ * Every Word format the conversion server reads. The two OOXML entries are the same package
+ * container, `.docm` differing only in a part nothing here touches; `.doc` is an entirely different
+ * binary format, and is here because the layout engine on the other end reads it natively.
  */
-const DOCX_EXTENSIONS = ['.docx', '.docm'];
+export const WORD_MIME_TYPES = [DOCX_MIME_TYPE, DOC_MIME_TYPE];
 
-/** The legacy binary Word format. A different container entirely, and not readable here. */
-const LEGACY_DOC_EXTENSION = '.doc';
+/** Extensions that route to the conversion path rather than straight to the PDF viewer. */
+const WORD_EXTENSIONS = ['.docx', '.docm', '.doc'];
 
-export function isDocxFileName(name: string): boolean {
+/**
+ * True for a document this app must convert before it can be shown. This is the app's entire
+ * routing decision - `App.openFile` sends anything else to the PDF viewer - so it is deliberately
+ * about "is this Word" rather than about one format.
+ */
+export function isWordFileName(name: string): boolean {
   const lower = name.toLowerCase();
-  return DOCX_EXTENSIONS.some(extension => lower.endsWith(extension));
+  return WORD_EXTENSIONS.some(extension => lower.endsWith(extension));
 }
 
 /**
- * True for the pre-2007 binary `.doc` format, which cannot be converted on-device - Word stores it
- * as a CFB/OLE2 container rather than a zip, and nothing here can render that. Worth detecting by
- * name because the picker filters by MIME type and cannot be relied on to have kept one out: a
- * `.doc` can still arrive from another app's "share into" or "open with".
+ * True for a MIME type an incoming intent or the picker may report for a Word document.
+ *
+ * Android does not agree with itself here: a `.doc` can arrive as `application/msword`, but some
+ * providers send `application/octet-stream` for it, which is why the picker's file-name filter and
+ * this both exist rather than one being derived from the other.
  */
-export function isLegacyDocFileName(name: string): boolean {
-  return name.toLowerCase().endsWith(LEGACY_DOC_EXTENSION);
+export function isWordMimeType(mimeType: string | null | undefined): boolean {
+  return mimeType != null && WORD_MIME_TYPES.includes(mimeType.toLowerCase());
+}
+
+/**
+ * The name to fall back on when a picker or an intent supplies none at all.
+ *
+ * Based on the reported MIME type because the extension is not a guess worth making: it becomes the
+ * converted PDF's name, which is what the print job, the share sheet and every exported file are
+ * then named after.
+ */
+export function fallbackNameForMimeType(mimeType: string | null | undefined): string {
+  if (mimeType?.toLowerCase() === DOC_MIME_TYPE) return 'document.doc';
+  if (mimeType?.toLowerCase() === DOCX_MIME_TYPE) return 'document.docx';
+  return 'document.pdf';
 }
 
 /**

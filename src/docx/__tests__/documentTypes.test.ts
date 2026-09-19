@@ -1,37 +1,65 @@
-import { isDocxFileName, isLegacyDocFileName, toPdfFileName } from '../documentTypes';
+import {
+  DOCX_MIME_TYPE,
+  DOC_MIME_TYPE,
+  fallbackNameForMimeType,
+  isWordFileName,
+  isWordMimeType,
+  toPdfFileName,
+} from '../documentTypes';
 
-describe('isDocxFileName', () => {
-  it('recognises the OOXML extensions in any case', () => {
-    expect(isDocxFileName('Report.docx')).toBe(true);
-    expect(isDocxFileName('REPORT.DOCX')).toBe(true);
-    expect(isDocxFileName('macro.docm')).toBe(true);
+describe('isWordFileName', () => {
+  it('recognises every Word extension in any case', () => {
+    expect(isWordFileName('Report.docx')).toBe(true);
+    expect(isWordFileName('REPORT.DOCX')).toBe(true);
+    expect(isWordFileName('macro.docm')).toBe(true);
   });
 
-  it('does not confuse the legacy .doc format for a .docx', () => {
-    expect(isDocxFileName('Report.doc')).toBe(false);
-    expect(isDocxFileName('report.DOC')).toBe(false);
+  it('accepts the legacy binary format, which the conversion server reads', () => {
+    expect(isWordFileName('Report.doc')).toBe(true);
+    expect(isWordFileName('report.DOC')).toBe(true);
   });
 
   it('rejects PDFs and extension-less names', () => {
-    expect(isDocxFileName('Report.pdf')).toBe(false);
-    expect(isDocxFileName('report')).toBe(false);
+    expect(isWordFileName('Report.pdf')).toBe(false);
+    expect(isWordFileName('report')).toBe(false);
   });
 
-  it('rejects an extension that merely contains "docx"', () => {
-    expect(isDocxFileName('report.docx.bak')).toBe(false);
-    expect(isDocxFileName('mydocx')).toBe(false);
+  it('rejects an extension that merely contains "doc"', () => {
+    expect(isWordFileName('report.docx.bak')).toBe(false);
+    expect(isWordFileName('mydocx')).toBe(false);
+    expect(isWordFileName('documentation.pdf')).toBe(false);
   });
 });
 
-describe('isLegacyDocFileName', () => {
-  it('recognises the binary format', () => {
-    expect(isLegacyDocFileName('Report.doc')).toBe(true);
-    expect(isLegacyDocFileName('REPORT.DOC')).toBe(true);
+describe('isWordMimeType', () => {
+  it('recognises both Word MIME types', () => {
+    expect(isWordMimeType(DOCX_MIME_TYPE)).toBe(true);
+    expect(isWordMimeType(DOC_MIME_TYPE)).toBe(true);
   });
 
-  it('does not match the OOXML formats', () => {
-    expect(isLegacyDocFileName('Report.docx')).toBe(false);
-    expect(isLegacyDocFileName('Report.docm')).toBe(false);
+  it('ignores case, which providers are inconsistent about', () => {
+    expect(isWordMimeType('Application/MSWord')).toBe(true);
+  });
+
+  it('rejects other types and a missing one', () => {
+    expect(isWordMimeType('application/pdf')).toBe(false);
+    expect(isWordMimeType('application/octet-stream')).toBe(false);
+    expect(isWordMimeType(null)).toBe(false);
+    expect(isWordMimeType(undefined)).toBe(false);
+  });
+});
+
+describe('fallbackNameForMimeType', () => {
+  // The extension decides which of the app's two opening paths the file takes, so the fallback has
+  // to carry the right one - a .doc named .pdf would be handed to the PDF viewer and fail there.
+  it('names a Word document after the format it actually is', () => {
+    expect(fallbackNameForMimeType(DOCX_MIME_TYPE)).toBe('document.docx');
+    expect(fallbackNameForMimeType(DOC_MIME_TYPE)).toBe('document.doc');
+  });
+
+  it('falls back to a PDF for anything unrecognised', () => {
+    expect(fallbackNameForMimeType('application/pdf')).toBe('document.pdf');
+    expect(fallbackNameForMimeType(undefined)).toBe('document.pdf');
   });
 });
 
@@ -39,6 +67,7 @@ describe('toPdfFileName', () => {
   it('swaps a Word extension for .pdf', () => {
     expect(toPdfFileName('Report.docx')).toBe('Report.pdf');
     expect(toPdfFileName('Quarterly macro.docm')).toBe('Quarterly macro.pdf');
+    expect(toPdfFileName('Legacy report.doc')).toBe('Legacy report.pdf');
   });
 
   it('leaves an existing name ending in .pdf alone', () => {

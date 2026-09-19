@@ -1,7 +1,11 @@
 import { useCallback, useState } from 'react';
-import { DocxConversionCancelledError, convertDocxFile, describeDocxError } from './convertDocx';
+import {
+  DocxConversionCancelledError,
+  cancelDocxConversion,
+  convertDocxFile,
+  describeDocxError,
+} from './convertDocx';
 import type { ConvertedDocument } from './convertDocx';
-import { cancelDocxConversion } from './NativeDocxModule';
 
 export type DocxConversionState =
   | { stage: 'idle' }
@@ -17,13 +21,14 @@ export interface UseDocxConversionResult {
 }
 
 /**
- * Drives a .docx → PDF conversion for the app's open-a-file flow, including the modal that covers
+ * Drives a Word → PDF conversion for the app's open-a-file flow, including the modal that covers
  * the wait.
  *
- * Conversion is a real render, not a file copy, so it takes seconds and needs to be visible: an
- * unresponsive "Choose a document" button for five seconds reads as a hang. Cancellation is
- * offered for the same reason - a large document is long enough that a user who picked the wrong
- * file should not have to wait it out.
+ * Conversion is an upload, a render and a download, not a file copy, so it takes seconds and needs
+ * to be visible: an unresponsive "Choose a document" button for five seconds reads as a hang.
+ * Cancellation is offered for the same reason - a large document is long enough that a user who
+ * picked the wrong file should not have to wait it out, and it is now also a network operation the
+ * user may want to abandon when the connection is poor.
  */
 export function useDocxConversion(): UseDocxConversionResult {
   const [state, setState] = useState<DocxConversionState>({ stage: 'idle' });
@@ -51,9 +56,9 @@ export function useDocxConversion(): UseDocxConversionResult {
   const dismissError = useCallback(() => setState({ stage: 'idle' }), []);
 
   const cancel = useCallback(() => {
-    // The dismiss is driven by the conversion's own promise rejecting with E_CANCELLED, so the
-    // modal stays up until the native side has actually torn its WebView down rather than
-    // disappearing while work continues invisibly.
+    // The dismiss is driven by the conversion's own promise rejecting with
+    // DocxConversionCancelledError, so the modal stays up until the upload has actually been
+    // aborted rather than disappearing while a request carries on invisibly.
     cancelDocxConversion().catch(() => undefined);
   }, []);
 
