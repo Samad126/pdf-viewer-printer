@@ -10,7 +10,22 @@
 /** The conversion server. One deployment, so one constant. */
 export const CONVERSION_SERVER_URL = 'https://converter.alakbaroff.com';
 
-export const CONVERT_ENDPOINT = `${CONVERSION_SERVER_URL}/convert`;
+/**
+ * The output format is part of the address, and cannot be omitted.
+ *
+ * There is deliberately no bare `/convert` on the server - one address that means one thing is
+ * easier to document and to test than two that mean the same thing - so asking for it answers with
+ * the catch-all 404, whose message tells the user to update the app. Which is literally what
+ * happened: this constant used to be that bare path, and the deployment that introduced the target
+ * broke every conversion in the shipped app until this changed.
+ *
+ * `PDF_TARGET` is the only target this app asks for. The server also lists what else each source
+ * can become at `GET /formats`, which is there so a client would not have to hard-code the table -
+ * worth reading if this app ever offers a choice of output format, and dead weight until it does.
+ */
+const PDF_TARGET = 'pdf';
+
+export const CONVERT_ENDPOINT = `${CONVERSION_SERVER_URL}/convert/${PDF_TARGET}`;
 
 /**
  * NOTE: there is deliberately no connect timeout here. It lives in the native upload

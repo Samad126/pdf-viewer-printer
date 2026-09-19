@@ -79,6 +79,10 @@ describe('convertDocxFile', () => {
     expect(upload).toHaveBeenCalledTimes(1);
     const [url, source, filename, destination] = upload.mock.calls[0];
     expect(url).toBe(CONVERT_ENDPOINT);
+    // The target is part of the path and a bare /convert answers with a 404 telling the user to
+    // update the app, so the suffix is asserted rather than assumed from the constant above - a
+    // test that only compares the constant against itself would not have caught that.
+    expect(url).toMatch(/\/convert\/pdf$/);
     expect(source).toBe('/mock/cache-dir/Report.docx');
     // The filename is the document's own: the server picks its import filter from it.
     expect(filename).toBe(DISPLAY_NAME);
