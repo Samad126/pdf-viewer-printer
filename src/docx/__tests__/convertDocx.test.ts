@@ -137,6 +137,58 @@ describe('convertDocxFile failures', () => {
   });
 });
 
+describe('convertDocxFile retries', () => {
+  // The library reports a response whose body ends before its Content-Length as "Download
+  // interrupted." on Android, intermittently, and it is indistinguishable from a dropped
+  // connection. A conversion is idempotent, so this is worth another attempt.
+  it('retries once when the first attempt fails in transport, and succeeds', async () => {
+    blobUtil.fetch
+      .mockRejectedValueOnce(new Error('Download interrupted.'))
+      .mockResolvedValueOnce(pdfResponse());
+
+    const result = await convertDocxFile(SOURCE_URI, DISPLAY_NAME);
+
+    expect(result.cached).toBe(false);
+    expect(blobUtil.fetch).toHaveBeenCalledTimes(2);
+    expect(fs.mv).toHaveBeenCalledTimes(1);
+    // The abandoned attempt's part file must not be left behind or written over.
+    expect(fs.unlink).toHaveBeenCalledWith(expect.stringContaining('.part'));
+  });
+
+  it('gives up after the second transport failure rather than looping', async () => {
+    blobUtil.fetch.mockRejectedValue(new Error('Download interrupted.'));
+
+    await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
+      code: 'E_CONVERT_UNREACHABLE',
+    });
+    expect(blobUtil.fetch).toHaveBeenCalledTimes(2);
+    expect(fs.mv).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a refusal from the server, which would fail identically', async () => {
+    blobUtil.fetch.mockResolvedValue({ respInfo: { status: 422, headers: {} } });
+    fs.readFile.mockResolvedValue(
+      JSON.stringify({ error: { message: 'This document is password protected.' } }),
+    );
+
+    await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
+      code: 'E_CONVERT_FAILED',
+    });
+    expect(blobUtil.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 200 that is not a PDF', async () => {
+    blobUtil.fetch.mockResolvedValue({
+      respInfo: { status: 200, headers: { 'Content-Type': 'text/html' } },
+    });
+
+    await expect(convertDocxFile(SOURCE_URI, DISPLAY_NAME)).rejects.toMatchObject({
+      code: 'E_CONVERT_NOT_A_PDF',
+    });
+    expect(blobUtil.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('cancelDocxConversion', () => {
   it('rejects an in-flight conversion as cancelled, not as a failure', async () => {
     // A request that stays open until something rejects it, which is what the real one does.

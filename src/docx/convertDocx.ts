@@ -104,9 +104,55 @@ export async function convertDocxFile(docxUri: string, displayName: string): Pro
  * Uploads the document and writes the converted PDF to `outputPath`, via a `.part` file that is
  * only moved into place once the whole response has arrived. A conversion that fails or is
  * cancelled therefore never leaves a half-written PDF where the viewer would find it.
+ *
+ * An attempt that fails in transport is retried once. On Android this library reports a response
+ * whose body ends before its Content-Length as "Download interrupted.", which is the same thing it
+ * says when the connection genuinely drops - the two are indistinguishable from here, and neither
+ * is the server's fault or the document's. A conversion is idempotent and the `.part` file is
+ * rewritten from scratch, so a second attempt cannot corrupt anything, and it is by far the
+ * cheapest fix available: the alternative is replacing the transport with a native upload.
  */
 async function upload(sourcePath: string, displayName: string, outputPath: string): Promise<void> {
   const partPath = `${outputPath}.part`;
+
+  // One deadline spanning both attempts, so that retrying cannot silently double how long the
+  // modal sits there - the user is waiting on this the whole time.
+  const deadline = Date.now() + CONVERSION_TIMEOUT_MS;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await uploadOnce(sourcePath, displayName, partPath, deadline);
+      // Same directory as the destination, so this is a rename rather than a copy across filesystems.
+      await ReactNativeBlobUtil.fs.mv(partPath, outputPath);
+      return;
+    } catch (error) {
+      // Removed on every failure path, including the ones that already read it to find the server's
+      // message: a stale part file would be invisible, since nothing else looks for one.
+      await ReactNativeBlobUtil.fs.unlink(partPath).catch(() => undefined);
+
+      // Retried only once, only for a transport failure, and only while there is time left to
+      // finish. A server error is a verdict on the document and would fail identically again.
+      const worthRetrying =
+        attempt === 0 && isTransportFailure(error) && Date.now() < deadline;
+      if (!worthRetrying) throw error;
+    }
+  }
+}
+
+/**
+ * One attempt at the upload. Throws a classified error for every way it can fail; deciding what to
+ * do about that is `upload`'s job.
+ */
+async function uploadOnce(
+  sourcePath: string,
+  displayName: string,
+  partPath: string,
+  deadline: number,
+): Promise<void> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new DocxConversionError('E_CONVERT_TIMEOUT', timeoutMessage());
+  }
 
   // The response is written straight to disk rather than returned through JS.
   //
@@ -137,7 +183,7 @@ async function upload(sourcePath: string, displayName: string, outputPath: strin
   const watchdog = setTimeout(() => {
     expired = true;
     task.cancel();
-  }, CONVERSION_TIMEOUT_MS);
+  }, remaining);
 
   try {
     const response = await task;
@@ -158,18 +204,9 @@ async function upload(sourcePath: string, displayName: string, outputPath: strin
       );
     }
 
-    // Same directory as the destination, so this is a rename rather than a copy across filesystems.
-    await ReactNativeBlobUtil.fs.mv(partPath, outputPath);
   } catch (error) {
-    // The `.part` file is removed on every failure path, including the ones above that already
-    // consumed it: a stale part file would be invisible, since nothing else looks for one.
-    await ReactNativeBlobUtil.fs.unlink(partPath).catch(() => undefined);
-
     if (expired) {
-      throw new DocxConversionError(
-        'E_CONVERT_TIMEOUT',
-        `The conversion server did not finish within ${Math.round(CONVERSION_TIMEOUT_MS / 1000)} seconds.`,
-      );
+      throw new DocxConversionError('E_CONVERT_TIMEOUT', timeoutMessage());
     }
     // The user's own cancellation ends up here too, since aborting the request rejects it. The flag
     // above is what tells the two apart: once the watchdog has fired, a rejection is the abort it
@@ -180,11 +217,30 @@ async function upload(sourcePath: string, displayName: string, outputPath: strin
     if (error instanceof DocxConversionError) {
       throw error;
     }
-    throw new DocxConversionError('E_CONVERT_UNREACHABLE', unreachableMessage(error));
+    throw new DocxConversionError('E_CONVERT_UNREACHABLE', describeTransportFailure(error));
   } finally {
     clearTimeout(watchdog);
     activeTask = null;
   }
+}
+
+function timeoutMessage(): string {
+  return `The conversion server did not finish within ${Math.round(
+    CONVERSION_TIMEOUT_MS / 1000,
+  )} seconds.`;
+}
+
+/**
+ * True for a failure in getting the request there and back, as opposed to a verdict on the
+ * document - which is the only kind worth another attempt.
+ *
+ * This is the app's own catch-all code, so it also covers the library's truncated-response report.
+ * A genuinely unreachable server is retried too, which costs one fast refusal; telling the two
+ * apart would mean matching on a library string that is not a contract, and getting that wrong
+ * would leave the truncated case - the one that actually happens - unretried.
+ */
+function isTransportFailure(error: unknown): boolean {
+  return error instanceof DocxConversionError && error.code === 'E_CONVERT_UNREACHABLE';
 }
 
 /**
@@ -220,15 +276,17 @@ function isHttpCancellation(error: unknown): boolean {
 }
 
 /**
- * A network failure, described rather than dumped.
+ * A failure in transit, described rather than dumped.
  *
- * The library reports a lost connection and a DNS failure with the same bare shapes, and neither is
- * comprehensible in a dialog, so both become the same sentence: the thing the user can act on is
- * that the server was not reached, not which layer failed.
+ * Deliberately does not claim the server was unreachable, which is only one of the things that
+ * land here and was wrong the one time it mattered: the library reports a response whose body ended
+ * early - which means the server *was* reached - as "Download interrupted.", and saying otherwise
+ * sends the reader off to check a connection that was working. The advice is the same either way,
+ * so the sentence says only what is certain.
  */
-function unreachableMessage(error: unknown): string {
+function describeTransportFailure(error: unknown): string {
   const detail = error instanceof Error && error.message.length > 0 ? ` (${error.message})` : '';
-  return `Could not reach the conversion server. Check your connection and try again.${detail}`;
+  return `The conversion did not finish. Check your connection and try again.${detail}`;
 }
 
 /** Header lookup, which has to be case-insensitive because HTTP header names are. */
