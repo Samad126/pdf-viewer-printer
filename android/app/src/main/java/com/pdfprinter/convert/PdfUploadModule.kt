@@ -53,7 +53,7 @@ class PdfUploadModule(private val reactContext: ReactApplicationContext) :
     override fun getName(): String = NAME
 
     /**
-     * Sends `sourcePath` to `url` as a single multipart part named `file`, and writes the response
+     * Sends `sourcePath` to `url` as a single multipart part named `files`, and writes the response
      * body to `destinationPath` when the server answers with a success.
      *
      * Resolves with the exchange's outcome - including for a rejection by the server, which is a
@@ -127,7 +127,7 @@ class PdfUploadModule(private val reactContext: ReactApplicationContext) :
         // name, so mangling it would misread the document.
         val prefix = buildString {
             append("--").append(boundary).append(CRLF)
-            append("Content-Disposition: form-data; name=\"file\"; filename=\"")
+            append("Content-Disposition: form-data; name=\"files\"; filename=\"")
             append(headerSafeFileName(fileName))
             append("\"").append(CRLF)
             append("Content-Type: application/octet-stream").append(CRLF)
@@ -148,7 +148,7 @@ class PdfUploadModule(private val reactContext: ReactApplicationContext) :
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                 setRequestProperty("Accept", "application/pdf, application/json")
                 // Declared up front so the request is not buffered in memory before being sent -
-                // a 25 MB document would otherwise be held twice.
+                // a 100 MB document would otherwise be held twice.
                 setFixedLengthStreamingMode(prefix.size.toLong() + source.length() + suffix.size)
             }
 

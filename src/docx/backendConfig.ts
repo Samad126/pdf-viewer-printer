@@ -53,9 +53,9 @@ export const CONVERSION_TIMEOUT_MS = 120_000;
  * says what is wrong, instead of after a minute of uploading and a bare 413 from the server.
  *
  * Set by the server's own request limit, which the deployment advertises as
- * `x-max-upload-bytes`, and the two are the same number (26214400) on purpose. They are checked
+ * `x-max-upload-bytes`, and the two are the same number (104857600) on purpose. They are checked
  * independently - here, by the multipart parser, and by the reverse proxy - and each answers with
  * its own message, so if one is ever changed the other has to move with it or the refusal the user
  * sees depends on which layer noticed first.
  */
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
