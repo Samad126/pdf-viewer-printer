@@ -49,6 +49,7 @@
             <data android:mimeType="application/pdf" />
             <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
             <data android:mimeType="application/msword" />
+            <data android:mimeType="application/octet-stream" />
         </intent-filter>
       </activity>
 

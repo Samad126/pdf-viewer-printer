@@ -21,6 +21,8 @@ private const val DOC_MIME_TYPE = "application/msword"
  * happens after this module has already decided whether to surface the intent at all - which is why
  * this has to list every format rather than deferring to the conversion path.
  */
+private const val OCTET_STREAM_MIME_TYPE = "application/octet-stream"
+private val SUPPORTED_EXTENSIONS = listOf(".pdf", ".docx", ".docm", ".doc")
 private val SUPPORTED_MIME_TYPES = setOf(PDF_MIME_TYPE, DOCX_MIME_TYPE, DOC_MIME_TYPE)
 
 /**
@@ -66,7 +68,17 @@ class ShareIntentModule(private val reactContext: ReactApplicationContext) :
             // A VIEW intent's data is whatever the sending app addressed us with, and the manifest
             // filter has already constrained it to a supported MIME type.
             Intent.ACTION_VIEW -> intent.data
-            Intent.ACTION_SEND -> if (intent.type in SUPPORTED_MIME_TYPES) extractSendStreamUri(intent) else null
+            Intent.ACTION_SEND -> when {
+                intent.type in SUPPORTED_MIME_TYPES -> extractSendStreamUri(intent)
+                // Many providers (Drive, some file managers, messengers) share a document as a
+                // generic binary, so the type says nothing and the file name has to decide.
+                intent.type == OCTET_STREAM_MIME_TYPE ->
+                    extractSendStreamUri(intent)?.takeIf {
+                        val name = resolveDisplayName(it, intent.type).lowercase()
+                        SUPPORTED_EXTENSIONS.any(name::endsWith)
+                    }
+                else -> null
+            }
             else -> null
         }
 
