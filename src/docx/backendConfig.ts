@@ -8,7 +8,7 @@
  */
 
 /** The conversion server. One deployment, so one constant. */
-export const CONVERSION_SERVER_URL = 'https://converter.alakbaroff.com';
+export const CONVERSION_SERVER_URL = 'https://converterapi.alakbaroff.com';
 
 /**
  * The output format is part of the address, and cannot be omitted.
