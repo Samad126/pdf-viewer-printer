@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fallbackNameForMimeType } from '../docx';
+import { MAX_PANEL_WIDTH, useIsTablet } from '../ui/useSideInset';
 import { AboutModal } from '../ui/AboutModal';
 import { RecentFilesScreen } from './RecentFilesScreen';
 import { RecentThumbnail } from './RecentThumbnail';
@@ -19,6 +20,9 @@ const CARD_THUMBNAIL_HEIGHT = 84;
 
 export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
+  const isTablet = useIsTablet();
+  const thumbWidth = isTablet ? 96 : CARD_THUMBNAIL_WIDTH;
+  const thumbHeight = isTablet ? 126 : CARD_THUMBNAIL_HEIGHT;
   const [error, setError] = useState<string | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [showAllRecents, setShowAllRecents] = useState(false);
@@ -109,12 +113,12 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
 
           <View style={styles.recentsGrid}>
             {homeRecents.map(file => (
-              <Pressable key={file.path} style={styles.recentCard} onPress={() => onFilePicked(file.path, file.name)}>
-                <View style={styles.recentThumbnailWrapper}>
+              <Pressable key={file.path} style={[styles.recentCard, { width: thumbWidth }]} onPress={() => onFilePicked(file.path, file.name)}>
+                <View style={{ width: thumbWidth, height: thumbHeight }}>
                   <RecentThumbnail
                     thumbnailPath={file.thumbnailPath}
-                    width={CARD_THUMBNAIL_WIDTH}
-                    height={CARD_THUMBNAIL_HEIGHT}
+                    width={thumbWidth}
+                    height={thumbHeight}
                   />
                   <Pressable
                     style={styles.recentRemoveButton}
@@ -165,6 +169,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 32,
+    maxWidth: MAX_PANEL_WIDTH,
   },
   pickButton: {
     backgroundColor: '#2f6fed',
@@ -184,6 +189,7 @@ const styles = StyleSheet.create({
   },
   recentsSection: {
     width: '100%',
+    maxWidth: MAX_PANEL_WIDTH,
     marginTop: 32,
   },
   recentsHeader: {
@@ -207,6 +213,7 @@ const styles = StyleSheet.create({
   recentsGrid: {
     flexDirection: 'row',
     gap: 16,
+    justifyContent: 'center',
   },
   recentCard: {
     width: CARD_THUMBNAIL_WIDTH,

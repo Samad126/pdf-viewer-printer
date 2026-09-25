@@ -9,6 +9,7 @@ export interface UseViewerToolsResult {
   showMoreMenu: boolean;
   showTableOfContents: boolean;
   showFindPanel: boolean;
+  showGoToPage: boolean;
   showAbout: boolean;
   nightMode: boolean;
   isSharing: boolean;
@@ -20,6 +21,9 @@ export interface UseViewerToolsResult {
   closeTableOfContents: () => void;
   handleSelectTocPage: (pageIndex: number) => void;
   closeFindPanel: () => void;
+  openGoToPage: () => void;
+  closeGoToPage: () => void;
+  handleGoToPage: (pageNumber: number) => void;
   handleJumpFromFind: (pageIndex: number) => void;
   closeAbout: () => void;
   closeShareError: () => void;
@@ -52,6 +56,7 @@ export function useViewerTools({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showTableOfContents, setShowTableOfContents] = useState(false);
   const [showFindPanel, setShowFindPanel] = useState(false);
+  const [showGoToPage, setShowGoToPage] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [nightMode, setNightMode] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
@@ -62,6 +67,15 @@ export function useViewerTools({
   const closeMoreMenu = useCallback(() => setShowMoreMenu(false), []);
   const closeTableOfContents = useCallback(() => setShowTableOfContents(false), []);
   const closeFindPanel = useCallback(() => setShowFindPanel(false), []);
+  const openGoToPage = useCallback(() => setShowGoToPage(true), []);
+  const closeGoToPage = useCallback(() => setShowGoToPage(false), []);
+  const handleGoToPage = useCallback(
+    (pageNumber: number) => {
+      setShowGoToPage(false);
+      pdfRef.current?.setPage(pageNumber);
+    },
+    [pdfRef],
+  );
   const closeAbout = useCallback(() => setShowAbout(false), []);
   const closeShareError = useCallback(() => setShareError(null), []);
 
@@ -111,6 +125,12 @@ export function useViewerTools({
       onPress: () => setShowTableOfContents(true),
     },
     {
+      key: 'go-to-page',
+      label: 'Go to page',
+      disabled: !hasPages,
+      onPress: openGoToPage,
+    },
+    {
       key: 'find',
       label: 'Find in document',
       onPress: () => setShowFindPanel(true),
@@ -155,6 +175,7 @@ export function useViewerTools({
     showMoreMenu,
     showTableOfContents,
     showFindPanel,
+    showGoToPage,
     showAbout,
     nightMode,
     isSharing,
@@ -166,6 +187,9 @@ export function useViewerTools({
     closeTableOfContents,
     handleSelectTocPage,
     closeFindPanel,
+    openGoToPage,
+    closeGoToPage,
+    handleGoToPage,
     handleJumpFromFind,
     closeAbout,
     closeShareError,
