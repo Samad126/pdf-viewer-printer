@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, BackHandler, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import Pdf from 'react-native-pdf';
 import type { PdfError, PdfRef, TableContent } from 'react-native-pdf';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnnotateScreen } from '../annotate/AnnotateScreen';
+import { FastScrollbar } from './FastScrollbar';
 import { NightModeOverlay } from './NightModeOverlay';
 import { usePrintFlow } from './usePrintFlow';
 import { useViewerTools } from './useViewerTools';
@@ -48,6 +49,8 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         tools.closeMoreMenu();
       } else if (tools.showTableOfContents) {
         tools.closeTableOfContents();
+      } else if (tools.showGoToPage) {
+        tools.closeGoToPage();
       } else if (tools.showFindPanel) {
         tools.closeFindPanel();
       } else if (print.showPrinterPicker) {
@@ -128,14 +131,27 @@ export function ViewerScreen({ filePath, fileName, onBack }: ViewerScreenProps):
         )}
 
         {tools.nightMode && loadError == null && <NightModeOverlay />}
+
+        {pageCount != null && loadError == null && (
+          <FastScrollbar
+            pageCount={pageCount}
+            currentPage={currentPage}
+            onJumpToPage={page => pdfRef.current?.setPage(page)}
+          />
+        )}
       </View>
 
       {pageCount != null && (
-        <View style={styles.pageIndicator}>
+        <Pressable
+          style={[styles.pageIndicator, { bottom: insets.bottom + 16 }]}
+          onPress={tools.openGoToPage}
+          accessibilityRole="button"
+          accessibilityLabel="Go to page"
+        >
           <Text style={styles.pageIndicatorText}>
-            Page {currentPage} / {pageCount}
+            Page {currentPage} / {pageCount}  ▾
           </Text>
-        </View>
+        </Pressable>
       )}
 
       <ViewerOverlays filePath={filePath} pageCount={pageCount ?? 0} tableContents={tableContents} print={print} tools={tools} />
@@ -168,15 +184,14 @@ const styles = StyleSheet.create({
   },
   pageIndicator: {
     position: 'absolute',
-    bottom: 12,
     alignSelf: 'center',
     backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
   },
   pageIndicatorText: {
     color: '#ffffff',
-    fontSize: 12,
+    fontSize: 15,
   },
 });

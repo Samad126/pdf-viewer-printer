@@ -2,6 +2,8 @@ import { pick, isErrorWithCode, errorCodes, types, keepLocalCopy } from '@react-
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { fallbackNameForMimeType } from '../docx';
+import { MAX_PANEL_WIDTH, useIsTablet } from '../ui/useSideInset';
 import { AboutModal } from '../ui/AboutModal';
 import { RecentFilesScreen } from './RecentFilesScreen';
 import { RecentThumbnail } from './RecentThumbnail';
@@ -18,6 +20,9 @@ const CARD_THUMBNAIL_HEIGHT = 84;
 
 export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
+  const isTablet = useIsTablet();
+  const thumbWidth = isTablet ? 96 : CARD_THUMBNAIL_WIDTH;
+  const thumbHeight = isTablet ? 126 : CARD_THUMBNAIL_HEIGHT;
   const [error, setError] = useState<string | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [showAllRecents, setShowAllRecents] = useState(false);
@@ -45,9 +50,13 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
   const handlePick = useCallback(async () => {
     setError(null);
     try {
-      const [picked] = await pick({ type: [types.pdf] });
+      const [picked] = await pick({ type: [types.pdf, types.docx, types.doc] });
+      // Only used when the provider reports no display name at all, where the extension decides
+      // which of the app's two opening paths this file takes.
+      const name = picked.name ?? fallbackNameForMimeType(picked.type);
+
       const [copy] = await keepLocalCopy({
-        files: [{ uri: picked.uri, fileName: picked.name ?? 'document.pdf' }],
+        files: [{ uri: picked.uri, fileName: name }],
         destination: 'cachesDirectory',
       });
 
@@ -56,7 +65,7 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
         return;
       }
 
-      onFilePicked(copy.localUri, picked.name ?? 'document.pdf');
+      onFilePicked(copy.localUri, name);
     } catch (pickError) {
       if (isErrorWithCode(pickError) && pickError.code === errorCodes.OPERATION_CANCELED) {
         return;
@@ -82,11 +91,13 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
     <View style={styles.container}>
       <Text style={styles.title}>PDF Printer</Text>
       <Text style={styles.subtitle}>
-        Pick a PDF to view it, or print it through a PDFium-rasterized, font-free copy.
+        Pick a PDF to view it, or print it through a PDFium-rasterized, font-free copy. Word
+        documents can be opened too. They need a connection - they are converted by an online
+        service, which is the only thing here that leaves the device.
       </Text>
 
       <Pressable style={styles.pickButton} onPress={handlePick}>
-        <Text style={styles.pickButtonLabel}>Choose a PDF</Text>
+        <Text style={styles.pickButtonLabel}>Choose a document</Text>
       </Pressable>
 
       {error != null && <Text style={styles.errorText}>{error}</Text>}
@@ -102,12 +113,12 @@ export function HomeScreen({ onFilePicked }: HomeScreenProps): React.JSX.Element
 
           <View style={styles.recentsGrid}>
             {homeRecents.map(file => (
-              <Pressable key={file.path} style={styles.recentCard} onPress={() => onFilePicked(file.path, file.name)}>
-                <View style={styles.recentThumbnailWrapper}>
+              <Pressable key={file.path} style={[styles.recentCard, { width: thumbWidth }]} onPress={() => onFilePicked(file.path, file.name)}>
+                <View style={{ width: thumbWidth, height: thumbHeight }}>
                   <RecentThumbnail
                     thumbnailPath={file.thumbnailPath}
-                    width={CARD_THUMBNAIL_WIDTH}
-                    height={CARD_THUMBNAIL_HEIGHT}
+                    width={thumbWidth}
+                    height={thumbHeight}
                   />
                   <Pressable
                     style={styles.recentRemoveButton}
@@ -158,6 +169,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 32,
+    maxWidth: MAX_PANEL_WIDTH,
   },
   pickButton: {
     backgroundColor: '#2f6fed',
@@ -177,6 +189,7 @@ const styles = StyleSheet.create({
   },
   recentsSection: {
     width: '100%',
+    maxWidth: MAX_PANEL_WIDTH,
     marginTop: 32,
   },
   recentsHeader: {
@@ -200,6 +213,7 @@ const styles = StyleSheet.create({
   recentsGrid: {
     flexDirection: 'row',
     gap: 16,
+    justifyContent: 'center',
   },
   recentCard: {
     width: CARD_THUMBNAIL_WIDTH,

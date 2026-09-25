@@ -1,5 +1,11 @@
 import React from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import type { TableContent } from 'react-native-pdf';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ExportProgressView, FindPanel } from '../pdf-tools';
@@ -9,8 +15,10 @@ import { PrintOptionsView } from '../printers/PrintOptionsView';
 import { PrinterPickerView } from '../printers/PrinterPickerView';
 import { AboutModal } from '../ui/AboutModal';
 import { CloseButton } from '../ui/CloseButton';
+import { useSideInset } from '../ui/useSideInset';
 import { useKeyboardHeight } from '../ui/useKeyboardHeight';
 import { MoreActionsMenu } from './MoreActionsMenu';
+import { GoToPagePanel } from './GoToPagePanel';
 import { TableOfContentsPanel } from './TableOfContentsPanel';
 import type { UsePrintFlowResult } from './usePrintFlow';
 import type { UseViewerToolsResult } from './useViewerTools';
@@ -39,6 +47,9 @@ export function ViewerOverlays({
   const keyboardHeight = useKeyboardHeight();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
+  // Clears the system navigation buttons that some tablets/phones draw over the bottom edge.
+  const sideInset = useSideInset();
+  const overlayBottom = insets.bottom + 16;
 
   return (
     <>
@@ -53,7 +64,12 @@ export function ViewerOverlays({
   function renderPriorityOverlay(): React.JSX.Element | null {
     if (print.showPrintChoice) {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <MoreActionsMenu
             title="Print"
             items={print.printChoiceItems}
@@ -65,7 +81,12 @@ export function ViewerOverlays({
 
     if (tools.showMoreMenu) {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <MoreActionsMenu
             items={tools.moreActionsItems}
             onClose={tools.closeMoreMenu}
@@ -76,11 +97,37 @@ export function ViewerOverlays({
 
     if (tools.showTableOfContents) {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <TableOfContentsPanel
             entries={tableContents}
             onSelectPage={tools.handleSelectTocPage}
             onClose={tools.closeTableOfContents}
+          />
+        </View>
+      );
+    }
+
+    if (tools.showGoToPage) {
+      return (
+        <View
+          style={[
+            styles.overlay,
+            {
+              bottom: overlayBottom + keyboardHeight,
+              left: sideInset,
+              right: sideInset,
+            },
+          ]}
+        >
+          <GoToPagePanel
+            pageCount={pageCount}
+            onGo={tools.handleGoToPage}
+            onClose={tools.closeGoToPage}
           />
         </View>
       );
@@ -94,12 +141,17 @@ export function ViewerOverlays({
       // otherwise leave less room than DESIRED_HEIGHT - the panel shrinks to fit rather than ever
       // pushing its own header/input off the top of the screen, which is what an earlier version
       // that only moved `bottom` (with an intrinsic percentage-based height) got wrong.
-      const bottom = 40 + keyboardHeight;
+      const bottom = overlayBottom + keyboardHeight;
       const minTop = insets.top + 64;
       const desiredHeight = Math.min(windowHeight * 0.5, 420);
       const top = Math.max(minTop, windowHeight - bottom - desiredHeight);
       return (
-        <View style={[styles.findOverlay, { top, bottom }]}>
+        <View
+          style={[
+            styles.findOverlay,
+            { top, bottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <FindPanel
             filePath={filePath}
             onJumpToPage={tools.handleJumpFromFind}
@@ -111,7 +163,12 @@ export function ViewerOverlays({
 
     if (print.showPrinterPicker) {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <PrinterPickerView
             discovery={print.discovery.state}
             onSelect={print.handleSelectPrinter}
@@ -124,19 +181,32 @@ export function ViewerOverlays({
 
     if (print.printOptionsTarget != null) {
       return (
-        <View style={styles.overlay}>
-          <PrintOptionsView
-            pageCount={pageCount}
-            onSubmit={print.handleSubmitPrintOptions}
-            onCancel={print.handleCancelPrintOptions}
-          />
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <PrintOptionsView
+              filePath={filePath}
+              pageCount={pageCount}
+              onSubmit={print.handleSubmitPrintOptions}
+              onCancel={print.handleCancelPrintOptions}
+            />
+          </ScrollView>
         </View>
       );
     }
 
     if (tools.exportState.stage !== 'idle') {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <ExportProgressView
             state={tools.exportState}
             onDismiss={tools.resetExport}
@@ -147,7 +217,12 @@ export function ViewerOverlays({
 
     if (tools.shareError != null) {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <View style={styles.shareErrorBox}>
             <View style={styles.shareErrorHeader}>
               <Text style={styles.shareErrorTitle}>Share failed</Text>
@@ -161,7 +236,12 @@ export function ViewerOverlays({
 
     if (print.printState.stage !== 'idle') {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <PrintProgressView
             state={print.printState}
             onDismiss={print.dismissPrint}
@@ -172,7 +252,12 @@ export function ViewerOverlays({
 
     if (print.ippState.stage !== 'idle') {
       return (
-        <View style={styles.overlay}>
+        <View
+          style={[
+            styles.overlay,
+            { bottom: overlayBottom, left: sideInset, right: sideInset },
+          ]}
+        >
           <IppPrintProgressView
             state={print.ippState}
             onCancel={print.handleCancelIppPrint}
@@ -191,7 +276,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 12,
     right: 12,
-    bottom: 40,
+    maxHeight: '70%',
   },
   findOverlay: {
     position: 'absolute',

@@ -2,9 +2,12 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CloseButton } from '../ui/CloseButton';
 import { parsePageRangeInput } from './pageRange';
+import { indicesToRangeText, PagePickerModal } from './PagePickerModal';
+import { PrintPreviewStrip } from './PrintPreviewStrip';
 import { DEFAULT_IPP_PRINT_OPTIONS, IppPrintOptions } from './types';
 
 interface PrintOptionsViewProps {
+  filePath: string;
   pageCount: number;
   onSubmit: (printOptions: IppPrintOptions) => void;
   onCancel: () => void;
@@ -31,6 +34,7 @@ const ORIENTATION_OPTIONS: Array<{ value: IppPrintOptions['orientation']; label:
 ];
 
 export function PrintOptionsView({
+  filePath,
   pageCount,
   onSubmit,
   onCancel,
@@ -38,17 +42,19 @@ export function PrintOptionsView({
 }: PrintOptionsViewProps): React.JSX.Element {
   const [copies, setCopies] = useState(DEFAULT_IPP_PRINT_OPTIONS.copies);
   const [pageRange, setPageRange] = useState(DEFAULT_IPP_PRINT_OPTIONS.pageRange);
+  const [showPicker, setShowPicker] = useState(false);
   const [colorMode, setColorMode] = useState(DEFAULT_IPP_PRINT_OPTIONS.colorMode);
   const [sides, setSides] = useState(DEFAULT_IPP_PRINT_OPTIONS.sides);
   const [orientation, setOrientation] = useState(DEFAULT_IPP_PRINT_OPTIONS.orientation);
 
-  const pageRangeError = useMemo(() => {
-    if (pageCount <= 0) return null;
+  const { pageRangeError, selectedPages } = useMemo(() => {
+    if (pageCount <= 0) return { pageRangeError: null, selectedPages: [] as number[] };
     try {
-      parsePageRangeInput(pageRange, pageCount);
-      return null;
+      const parsed = parsePageRangeInput(pageRange, pageCount);
+      const pages = parsed ?? Array.from({ length: pageCount }, (_, i) => i);
+      return { pageRangeError: null, selectedPages: pages };
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return { pageRangeError: error instanceof Error ? error.message : String(error), selectedPages: [] as number[] };
     }
   }, [pageRange, pageCount]);
 
@@ -112,6 +118,27 @@ export function PrintOptionsView({
         editable={!disabled}
       />
       {pageRangeError != null && <Text style={styles.errorText}>{pageRangeError}</Text>}
+
+      {selectedPages.length > 0 && (
+        <>
+          <PrintPreviewStrip filePath={filePath} pageIndices={selectedPages} />
+          <Pressable style={styles.chooseMoreButton} onPress={() => setShowPicker(true)} disabled={disabled}>
+            <Text style={styles.chooseMoreLabel}>Choose more</Text>
+          </Pressable>
+        </>
+      )}
+      {showPicker && (
+        <PagePickerModal
+          filePath={filePath}
+          pageCount={pageCount}
+          initialSelection={selectedPages}
+          onCancel={() => setShowPicker(false)}
+          onDone={picked => {
+            setShowPicker(false);
+            setPageRange(picked.length === pageCount ? '' : indicesToRangeText(picked));
+          }}
+        />
+      )}
 
       <Text style={styles.label}>Color</Text>
       <SegmentedControl options={COLOR_MODE_OPTIONS} value={colorMode} onChange={setColorMode} disabled={disabled} />
@@ -261,6 +288,19 @@ const styles = StyleSheet.create({
   },
   segmentedLabelSelected: {
     color: '#ffffff',
+  },
+  chooseMoreButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2f6fed',
+  },
+  chooseMoreLabel: {
+    color: '#63a4ff',
+    fontWeight: '600',
   },
   printButton: {
     backgroundColor: '#1f8a4c',

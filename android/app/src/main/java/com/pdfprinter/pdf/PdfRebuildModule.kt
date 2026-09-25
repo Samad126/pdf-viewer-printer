@@ -12,7 +12,10 @@ import com.facebook.react.bridge.WritableArray
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.roundToInt
 import android.graphics.pdf.PdfDocument as AndroidPdfDocument
+
+private const val POINTS_PER_INCH = 72f
 
 private const val MIN_DPI = 36
 private const val MAX_DPI = 1200
@@ -85,11 +88,26 @@ class PdfRebuildModule(private val reactContext: ReactApplicationContext) :
                         val width = size.width.coerceAtLeast(1)
                         val height = size.height.coerceAtLeast(1)
                         bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        // PDFium draws onto whatever is there, and a fresh bitmap is transparent:
+                        // thin glyphs (minus signs, fraction bars) then reach the printer as
+                        // partially transparent pixels, which some drivers drop.
+                        bitmap?.eraseColor(android.graphics.Color.WHITE)
                         page.renderPageBitmap(bitmap, 0, 0, width, height, renderAnnot = true)
 
-                        val pageInfo = PageInfo.Builder(width, height, outputPosition + 1).create()
+                        // PdfDocument page units are points (1/72"), not pixels. Declaring the
+                        // pixel size made every page ~4x its real size at 300 DPI, so the printer
+                        // had to shrink it to fit and thin strokes (minus signs, fraction bars)
+                        // vanished in the downscale.
+                        val pageWidthPt = (width * POINTS_PER_INCH / screenDpi).roundToInt().coerceAtLeast(1)
+                        val pageHeightPt = (height * POINTS_PER_INCH / screenDpi).roundToInt().coerceAtLeast(1)
+                        val pageInfo = PageInfo.Builder(pageWidthPt, pageHeightPt, outputPosition + 1).create()
                         val androidPage = androidDocument.startPage(pageInfo)
-                        androidPage.canvas.drawBitmap(bitmap ?: return@use, 0f, 0f, null)
+                        androidPage.canvas.drawBitmap(
+                            bitmap ?: return@use,
+                            null,
+                            android.graphics.Rect(0, 0, pageWidthPt, pageHeightPt),
+                            android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG),
+                        )
                         androidDocument.finishPage(androidPage)
                     }
                     succeededPages++

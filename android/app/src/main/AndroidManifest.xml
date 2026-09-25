@@ -29,17 +29,27 @@
         <!--
           A <data> element with only android:mimeType (no scheme) implicitly matches both
           content:// and file:// sources per Android's intent-filter matching rules, which covers
-          "Open with" from file managers/browsers/downloads and PDFs opened from another app.
+          "Open with" from file managers/browsers/downloads and files opened from another app.
+
+          Word documents are registered here as well as PDFs. They are converted to PDF once opened,
+          so from the user's side the app simply opens them. Both Word MIME types are listed: the
+          OOXML one for .docx/.docm, and application/msword for the legacy binary .doc, which the
+          conversion server reads natively.
         -->
         <intent-filter>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.DEFAULT" />
             <data android:mimeType="application/pdf" />
+            <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            <data android:mimeType="application/msword" />
         </intent-filter>
         <intent-filter>
             <action android:name="android.intent.action.SEND" />
             <category android:name="android.intent.category.DEFAULT" />
             <data android:mimeType="application/pdf" />
+            <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            <data android:mimeType="application/msword" />
+            <data android:mimeType="application/octet-stream" />
         </intent-filter>
       </activity>
 

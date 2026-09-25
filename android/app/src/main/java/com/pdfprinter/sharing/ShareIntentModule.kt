@@ -12,14 +12,25 @@ import com.facebook.react.bridge.ReactMethod
 import com.pdfprinter.pdf.PdfWorkExecutors
 
 private const val PDF_MIME_TYPE = "application/pdf"
-private const val DEFAULT_SHARED_FILE_NAME = "Shared document.pdf"
+private const val DOCX_MIME_TYPE =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+private const val DOC_MIME_TYPE = "application/msword"
 
 /**
- * Surfaces a PDF the app was opened or shared with from another app (file manager "Open with",
- * a browser download, an email attachment's "Share" action, ...) via the VIEW/SEND intent-filters
- * declared in AndroidManifest.xml. RN's own Linking module only ever surfaces a VIEW intent's
- * data URI, not a SEND intent's EXTRA_STREAM, so both are handled here instead for one consistent
- * JS-side API.
+ * The document types this app can open. A Word document is converted to PDF once it is in, but that
+ * happens after this module has already decided whether to surface the intent at all - which is why
+ * this has to list every format rather than deferring to the conversion path.
+ */
+private const val OCTET_STREAM_MIME_TYPE = "application/octet-stream"
+private val SUPPORTED_EXTENSIONS = listOf(".pdf", ".docx", ".docm", ".doc")
+private val SUPPORTED_MIME_TYPES = setOf(PDF_MIME_TYPE, DOCX_MIME_TYPE, DOC_MIME_TYPE)
+
+/**
+ * Surfaces a document the app was opened or shared with from another app (file manager "Open
+ * with", a browser download, an email attachment's "Share" action, ...) via the VIEW/SEND
+ * intent-filters declared in AndroidManifest.xml. RN's own Linking module only ever surfaces a
+ * VIEW intent's data URI, not a SEND intent's EXTRA_STREAM, so both are handled here instead for
+ * one consistent JS-side API.
  */
 class ShareIntentModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -27,16 +38,20 @@ class ShareIntentModule(private val reactContext: ReactApplicationContext) :
     override fun getName(): String = NAME
 
     @ReactMethod
-    fun getSharedPdfFile(promise: Promise) {
+    fun getSharedDocumentFile(promise: Promise) {
         PdfWorkExecutors.io.execute {
             val activity = reactContext.currentActivity
             val intent = activity?.intent
-            val uri = intent?.let { extractPdfUri(it) }
+            val uri = intent?.let { extractDocumentUri(it) }
 
-            if (uri == null) {
+            if (uri == null || intent == null) {
                 promise.resolve(null)
                 return@execute
             }
+
+            val result = Arguments.createMap()
+            result.putString("uri", uri.toString())
+            result.putString("name", resolveDisplayName(uri, intent.type))
 
             // Consume it: without this, resuming the app from recents later (no new intent
             // delivered, so this Intent object is still the one onNewIntent last set) would keep
@@ -44,17 +59,26 @@ class ShareIntentModule(private val reactContext: ReactApplicationContext) :
             intent.data = null
             intent.removeExtra(Intent.EXTRA_STREAM)
 
-            val result = Arguments.createMap()
-            result.putString("uri", uri.toString())
-            result.putString("name", resolveDisplayName(uri))
             promise.resolve(result)
         }
     }
 
-    private fun extractPdfUri(intent: Intent): Uri? =
+    private fun extractDocumentUri(intent: Intent): Uri? =
         when (intent.action) {
+            // A VIEW intent's data is whatever the sending app addressed us with, and the manifest
+            // filter has already constrained it to a supported MIME type.
             Intent.ACTION_VIEW -> intent.data
-            Intent.ACTION_SEND -> if (intent.type == PDF_MIME_TYPE) extractSendStreamUri(intent) else null
+            Intent.ACTION_SEND -> when {
+                intent.type in SUPPORTED_MIME_TYPES -> extractSendStreamUri(intent)
+                // Many providers (Drive, some file managers, messengers) share a document as a
+                // generic binary, so the type says nothing and the file name has to decide.
+                intent.type == OCTET_STREAM_MIME_TYPE ->
+                    extractSendStreamUri(intent)?.takeIf {
+                        val name = resolveDisplayName(it, intent.type).lowercase()
+                        SUPPORTED_EXTENSIONS.any(name::endsWith)
+                    }
+                else -> null
+            }
             else -> null
         }
 
@@ -66,7 +90,12 @@ class ShareIntentModule(private val reactContext: ReactApplicationContext) :
             intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
         }
 
-    private fun resolveDisplayName(uri: Uri): String {
+    /**
+     * The name this file will be opened under, which is load-bearing rather than cosmetic: the
+     * JS side decides whether a file needs converting by its extension, so a Word document whose
+     * name lost its `.docx` would be handed to the PDF viewer as-is and fail there.
+     */
+    private fun resolveDisplayName(uri: Uri, mimeType: String?): String {
         if (uri.scheme == "content") {
             try {
                 reactContext.contentResolver
@@ -83,8 +112,23 @@ class ShareIntentModule(private val reactContext: ReactApplicationContext) :
                 // path-segment fallback below rather than failing the whole open.
             }
         }
-        val lastSegment = uri.lastPathSegment ?: return DEFAULT_SHARED_FILE_NAME
-        return if (lastSegment.endsWith(".pdf", ignoreCase = true)) lastSegment else "$lastSegment.pdf"
+        val lastSegment = uri.lastPathSegment ?: return defaultNameFor(mimeType)
+        // A provider that reports a bare name with no extension at all still has to end up with a
+        // recognisable one, and the intent's MIME type is the only thing left that says which.
+        return if (lastSegment.contains('.')) lastSegment else "$lastSegment${extensionFor(mimeType)}"
+    }
+
+    private fun defaultNameFor(mimeType: String?): String = "Shared document${extensionFor(mimeType)}"
+
+    /**
+     * The one place that maps an intent's MIME type onto an extension, so the fallback name above
+     * cannot drift out of step with it. Getting this wrong is not cosmetic: an unrecognised Word
+     * document lands on `.pdf` and is then handed to the PDF viewer, which fails on it.
+     */
+    private fun extensionFor(mimeType: String?): String = when (mimeType) {
+        DOCX_MIME_TYPE -> ".docx"
+        DOC_MIME_TYPE -> ".doc"
+        else -> ".pdf"
     }
 
     companion object {

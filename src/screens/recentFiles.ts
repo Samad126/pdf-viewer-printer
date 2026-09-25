@@ -70,15 +70,24 @@ export async function loadRecentFiles(): Promise<RecentFile[]> {
  * Records a file as just opened - moves it to the front if already present (rather than
  * duplicating it), and trims the stored list to MAX_STORED_RECENTS. Resolves with the updated
  * list.
+ *
+ * `thumbnailSourcePath` is for a file that is not itself a PDF but has a PDF rendering of it: a
+ * Word document is listed and reopened under the path and name it was opened with, so that the
+ * recents list shows what the user actually picked, while its thumbnail has to come from the PDF
+ * it was converted into. Defaults to `path` for everything that is already a PDF.
  */
-export async function recordRecentFile(path: string, name: string): Promise<RecentFile[]> {
+export async function recordRecentFile(
+  path: string,
+  name: string,
+  thumbnailSourcePath: string = path,
+): Promise<RecentFile[]> {
   const existing = await readRecentsFile();
   const previousEntry = existing.find(file => file.path === path);
   const withoutThisPath = existing.filter(file => file.path !== path);
 
   // Reuse an already-generated thumbnail for a file that's simply being reopened, rather than
   // re-rasterizing its first page every single time it's opened.
-  const thumbnailPath = previousEntry?.thumbnailPath ?? (await generateThumbnail(path));
+  const thumbnailPath = previousEntry?.thumbnailPath ?? (await generateThumbnail(thumbnailSourcePath));
 
   const updated = [{ path, name, openedAt: Date.now(), thumbnailPath }, ...withoutThisPath].slice(
     0,
